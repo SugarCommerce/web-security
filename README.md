@@ -1,47 +1,18 @@
 # web-security
 
-The security layer a plain PHP web application ends up writing by hand every
-time: untrusted input cleaned and validated, keyed hashing for values that must
-be comparable but never readable, signed-cookie sessions for a single shared
-password, and CSRF tokens with nothing to store.
+Signed-cookie sessions for a single shared password, CSRF tokens with nothing
+to store, and keyed hashing for the values an application has to compare but
+should never be able to read back.
 
-Four classes. No framework, no container, no middleware stack.
+Three classes. No framework, no container, no middleware stack.
+
+For cleaning and validating the input itself, see
+[sanitize](https://github.com/sugarcommerce/sanitize), which this deliberately
+does not depend on.
 
 ```bash
 composer require sugarcommerce/web-security
 ```
-
-## Input
-
-Every method takes an untrusted string and returns something safe to store, or
-`''`. Always `''` — never null, never an exception — so every call site is the
-same shape.
-
-```php
-use SugarCommerce\WebSecurity\Input;
-
-Input::clean_text( $value, 120 );           // control characters out, whitespace collapsed
-Input::email( ' Jordan@EXAMPLE.COM ' );     // 'Jordan@example.com', or ''
-Input::mask_email( 'jordan@example.com' );  // 'jo****@example.com'
-Input::url( $value );                       // http(s) only, or ''
-Input::prefixed_id( $value, 'acct' );       // 'acct_1A2b3C', or ''
-Input::hex( $value, 64 );                   // lower-cased, exact length, or ''
-Input::int( $_GET['page'] ?? 1, 1, 10_000, 1 );
-Input::one_of( $_GET['sort'] ?? '', $sortable, 'created_at' );
-```
-
-`clean_text()` strips more than control characters. It also removes the
-Unicode used for display spoofing — zero-width joiners, the byte-order mark,
-and the bidirectional overrides that make an uploaded `exe.txt` render as
-`txt.exe` in a file listing.
-
-`email()` lower-cases the domain and leaves the local part alone. RFC 5321 says
-the local part is case-sensitive; normalising the whole address is the common
-shortcut, and the bounce it eventually causes is nobody's fault but yours.
-
-`one_of()` is the allow-list form, and the only validation that works for a
-value reaching SQL as an identifier rather than a parameter — a sort column, a
-table alias. Column names cannot be bound.
 
 ## Hash
 
