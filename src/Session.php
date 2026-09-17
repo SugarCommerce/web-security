@@ -108,18 +108,36 @@ final readonly class Session {
 	/**
 	 * Mint a session value, for setting as a cookie.
 	 *
+	 * Claims are for what the session needs to remember about who it belongs
+	 * to — a buyer's address, an account id — and are signed with the rest of
+	 * it, so the browser holding the cookie cannot edit them. They are not
+	 * secret: anybody with the cookie can read them, so a claim is an
+	 * identifier, never a credential.
+	 *
+	 * `sub` is reserved. It carries the subject this session was issued for
+	 * and is checked on the way back.
+	 *
 	 * @since 1.0.0
+	 * @since 1.1.0 Takes claims.
+	 *
+	 * @param array<string, scalar> $claims Extra values to sign into it.
 	 *
 	 * @return string The cookie value.
 	 *
 	 * @throws \LogicException When no password is configured.
 	 */
-	public function issue(): string {
+	public function issue( array $claims = array() ): string {
 		if ( null === $this->signer ) {
 			throw new \LogicException( 'Cannot issue a session with no password configured.' );
 		}
 
-		return $this->signer->sign( self::NAMESPACE, array( 'sub' => $this->subject ), $this->lifetime );
+		return $this->signer->sign(
+			self::NAMESPACE,
+			// Subject first: `+` keeps the left side's keys, so a caller
+			// passing their own `sub` cannot mint a session for another role.
+			array( 'sub' => $this->subject ) + $claims,
+			$this->lifetime
+		);
 	}
 
 	/**

@@ -60,6 +60,21 @@ if ( $session->authenticate( $submitted ) ) {
 $session->valid( $_COOKIE[ Session::COOKIE ] ?? '' );
 ```
 
+A session can carry claims — who it belongs to, rather than only which role it
+is:
+
+```php
+$cookie = $session->issue( array( 'e' => 'jordan@example.com' ) );
+$token  = $session->read( $cookie );
+
+$token instanceof Token ? $token->get( 'e' ) : null;
+```
+
+They are signed with the rest of it, so the browser holding the cookie cannot
+edit them — but they are not secret, and anybody with the cookie can read them.
+A claim is an identifier, never a credential. `sub` is reserved and always wins,
+so a caller cannot pass one to mint another role's session.
+
 A signed cookie rather than a PHP session: nothing on disk to clean up, nothing
 shared between workers, nothing to make sticky behind a load balancer. Rotating
 the password ends every existing session for free, because the signing key is

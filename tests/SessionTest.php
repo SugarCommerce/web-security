@@ -90,6 +90,37 @@ final class SessionTest extends TestCase {
 		$this->assertInstanceOf( Token::class, $session->read( $session->issue() ) );
 	}
 
+	public function test_a_session_carries_its_claims(): void {
+		$session = new Session( self::PASSWORD );
+		$token   = $session->read( $session->issue( array( 'e' => 'jordan@example.com' ) ) );
+
+		$this->assertInstanceOf( Token::class, $token );
+		$this->assertSame( 'jordan@example.com', $token->get( 'e' ) );
+	}
+
+	/**
+	 * Otherwise a caller holding one role's session could mint another's.
+	 */
+	public function test_claims_cannot_overwrite_the_subject(): void {
+		$session = new Session( self::PASSWORD, subject: 'buyer' );
+		$cookie  = $session->issue( array( 'sub' => 'operator' ) );
+
+		$this->assertFalse( ( new Session( self::PASSWORD, subject: 'operator' ) )->valid( $cookie ) );
+		$this->assertTrue( $session->valid( $cookie ) );
+	}
+
+	public function test_claims_are_signed_with_the_rest(): void {
+		$session = new Session( self::PASSWORD );
+		$cookie  = $session->issue( array( 'e' => 'jordan@example.com' ) );
+
+		// Swap the payload for one that claims a different address, keeping
+		// the signature. A claim the holder can edit is not a claim.
+		[ , $signature ] = explode( '.', $cookie, 2 ) + array( '', '' );
+		$forged          = strtr( base64_encode( (string) json_encode( array( 'sub' => 'operator', 'e' => 'sydney@example.com' ) ) ), '+/', '-_' );
+
+		$this->assertFalse( $session->valid( rtrim( $forged, '=' ) . '.' . $signature ) );
+	}
+
 	public function test_with_no_password_nothing_is_configured(): void {
 		$session = new Session( '' );
 
