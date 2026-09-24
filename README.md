@@ -141,6 +141,24 @@ An empty token means *always fail*, never *no check needed*. `verify()` already
 reads it that way; anything calling `token()` directly has to make the same
 choice.
 
+## Sealing values at rest
+
+```php
+use SugarCommerce\WebSecurity\{Hash, Sealer};
+
+$sealer = new Sealer( $data_key, 'emails' );
+$index  = new Hash( $data_key );
+
+$row = array(
+    'email'      => $sealer->seal( $email ),          // s1.… — useless without the key
+    'email_hash' => $index->opaque( strtolower( $email ) ), // what lookups compare
+);
+
+$email = $sealer->reveal( $row['email'] );             // opens sealed, passes plain through
+```
+
+libsodium secretbox (authenticated), a fresh nonce per seal, a key derived per context. Keep the key in configuration, never beside the data: a stolen database or backup is then ciphertext. `reveal()` lets a column be sealed gradually — sealed values open, plain ones pass through, and a value that will not open reads as `''` rather than as ciphertext.
+
 ## Testing
 
 ```bash
