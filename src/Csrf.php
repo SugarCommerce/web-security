@@ -39,8 +39,8 @@ final readonly class Csrf {
 	/**
 	 * Form field and header name carrying the token.
 	 */
-	public const FIELD  = '_csrf';
-	public const HEADER = 'x-csrf-token';
+	public const string FIELD = '_csrf';
+	public const string HEADER = 'x-csrf-token';
 
 	/**
 	 * @param string $secret      Signing key. Use the application's general
@@ -104,6 +104,7 @@ final readonly class Csrf {
 	 *
 	 * @return bool
 	 */
+	#[\NoDiscard( 'False means the request did not come from this site.' )]
 	public function verify( string $submitted, ?array $cookies = null ): bool {
 		$expected = $this->token( $cookies );
 

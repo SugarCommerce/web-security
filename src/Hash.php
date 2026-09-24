@@ -86,6 +86,7 @@ final readonly class Hash {
 	 *
 	 * @return bool
 	 */
+	#[\NoDiscard( 'An unchecked comparison checks nothing.' )]
 	public function matches( string $value, string $digest ): bool {
 		return '' !== $digest && hash_equals( $digest, $this->opaque( $value ) );
 	}

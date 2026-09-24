@@ -38,12 +38,12 @@ final readonly class Session {
 	 * Default cookie name. Override it per application when two of them
 	 * might share a hostname.
 	 */
-	public const COOKIE = 'session';
+	public const string COOKIE = 'session';
 
 	/**
 	 * Namespace the cookie is signed under.
 	 */
-	private const NAMESPACE = 'web-security.session';
+	private const string NAMESPACE = 'web-security.session';
 
 	/**
 	 * Separates the password from the signing key derived from it.
@@ -53,7 +53,7 @@ final readonly class Session {
 	 * is that a key and a credential should not be the same bytes: anything
 	 * that leaks one would otherwise hand over the other.
 	 */
-	private const KDF_CONTEXT = 'web-security/session/v1';
+	private const string KDF_CONTEXT = 'web-security/session/v1';
 
 	/**
 	 * How long a session lasts, in seconds. Long enough to work through a
@@ -149,6 +149,7 @@ final readonly class Session {
 	 *
 	 * @return bool
 	 */
+	#[\NoDiscard( 'False means the caller is not signed in.' )]
 	public function valid( string $cookie ): bool {
 		return $this->read( $cookie ) instanceof Token;
 	}
@@ -167,6 +168,7 @@ final readonly class Session {
 	 *
 	 * @return Token|Reason The session, or why it was refused.
 	 */
+	#[\NoDiscard( 'A Reason means the session is not valid.' )]
 	public function read( string $cookie ): Token|Reason {
 		if ( null === $this->signer ) {
 			return Reason::Malformed;
@@ -200,6 +202,7 @@ final readonly class Session {
 	 *
 	 * @return bool
 	 */
+	#[\NoDiscard( 'False means the password was wrong.' )]
 	public function authenticate( #[\SensitiveParameter] string $submitted ): bool {
 		if ( ! $this->configured() || '' === $submitted ) {
 			return false;

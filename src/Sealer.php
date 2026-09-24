@@ -42,7 +42,7 @@ final readonly class Sealer {
 	/**
 	 * Marks a sealed value, and which format it is in.
 	 */
-	public const PREFIX = 's1.';
+	public const string PREFIX = 's1.';
 
 	/**
 	 * The derived key.
@@ -101,6 +101,7 @@ final readonly class Sealer {
 	 * @return string|null The value, or null when it is not one this key
 	 *                     sealed — tampered, truncated, or another key's.
 	 */
+	#[\NoDiscard( 'Null means the value was not sealed with this key.' )]
 	public function open( string $sealed ): ?string {
 		if ( ! self::sealed( $sealed ) ) {
 			return null;
