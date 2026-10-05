@@ -1,10 +1,11 @@
 # web-security
 
-Signed-cookie sessions for a single shared password, CSRF tokens with nothing
-to store, and keyed hashing for the values an application has to compare but
-should never be able to read back.
+Signed-cookie sessions for a single shared password, passwordless sign-in
+links, CSRF tokens with nothing to store, bot resistance for public forms
+without a captcha, sealing for values at rest, and keyed hashing for the values
+an application has to compare but should never be able to read back.
 
-Three classes. No framework, no container, no middleware stack.
+Six small classes. No framework, no container, no middleware stack.
 
 For cleaning and validating the input itself, see
 [sanitize](https://github.com/sugarcommerce/sanitize), which this deliberately
@@ -38,6 +39,14 @@ the secret.
 
 An empty value hashes to `''`, not to a digest of the empty string, which would
 otherwise compare equal across every row that had no address.
+
+One configured secret, several purposes: derive a key per purpose rather than
+keying every index with the secret itself, so an email's lookup hash never
+equals its rate-limit key and rotating one is a decision about that one.
+
+```php
+$index = Hash::derived( $data_key, 'app/email-index' );   // HKDF-SHA256, stable
+```
 
 Not for API keys — those are looked up *by* their digest, so the digest cannot
 depend on a secret the finder might not have; use
@@ -134,6 +143,24 @@ is exactly the shape of a form-submit attack.
 Key it on a general token secret rather than the password behind the session,
 so rotating one does not silently invalidate the other.
 
+Where the token arrived, and what the browser says about where the request came
+from:
+
+```php
+$token = Csrf::submitted( $request->form, $request->header( Csrf::HEADER ), $request->json() );
+
+if ( ! Csrf::same_origin( $request->header( 'origin' ), $request->header( 'referer' ), $request->host )
+    || ! $csrf->verify( $token ) ) {
+    http_response_code( 403 );
+}
+```
+
+`submitted()` reads the form field, then a JSON body, then the header — never
+the query string, where a token ends up in logs and Referer headers.
+`same_origin()` is false only when Origin (or, failing that, Referer) names
+another host, compared exactly with its port; their absence is not evidence,
+so it is a first check beside `verify()`, never instead of it.
+
 Exempt the login form. There is no session yet, and forging a login only forces
 the victim to submit a password the attacker does not have.
 
@@ -159,11 +186,78 @@ $email = $sealer->reveal( $row['email'] );             // opens sealed, passes p
 
 libsodium secretbox (authenticated), a fresh nonce per seal, a key derived per context. Keep the key in configuration, never beside the data: a stolen database or backup is then ciphertext. `reveal()` lets a column be sealed gradually — sealed values open, plain ones pass through, and a value that will not open reads as `''` rather than as ciphertext.
 
+Moving to a new key, and writing values that may already be sealed:
+
+```php
+$new->reseal( $stored, $old );   // sealed under $old, $new or not at all → sealed under $new; null if no key opens it
+$sealer->seal_once( $value );    // never seals a sealed value twice
+```
+
+`reseal()` is safe to run twice, so a rotation that dies part-way is finished
+by running it again. Null means the value is under a key nobody has: stop
+rather than overwrite it.
+
+## Magic links
+
+Passwordless sign-in: a short-lived link that is exchanged for a session.
+
+```php
+use SugarCommerce\WebSecurity\{MagicLink, Session};
+
+$magic = new MagicLink( $signer, new Session( $secret, subject: 'buyer', lifetime: 2592000 ), 'buyer-link', ttl: 3600 );
+
+$url = 'https://example.com/enter/' . $magic->link( array( 'e' => $email ) );
+
+$token = $magic->redeem( $from_url );                     // Token, or a Reason
+if ( $token instanceof Token ) {
+    setcookie( 'buyer', $magic->issue( array( 'e' => $token->get( 'e' ) ) ), $magic->cookie_options( $is_https ) );
+}
+
+$magic->read( $_COOKIE['buyer'] ?? '' );                   // who is signed in
+```
+
+The link and the session are signed under different namespaces, so a long-lived
+cookie pasted into the sign-in URL is not a link, and a forwarded link is not a
+session. Not single-use, deliberately: mail scanners fetch every URL in a
+message before the person clicks, and a link that burns on first fetch is spent
+before it is used. Its short life is what limits it.
+
+## Public forms
+
+A trap field and a signed stamp of when the form was drawn — most of what a
+captcha catches, without sending every visitor to a third party.
+
+```php
+use SugarCommerce\WebSecurity\FormGuard;
+
+$guard = new FormGuard( $signer, 'contact' );           // at least 3 seconds, at most a day
+
+// Drawing: hidden inputs FormGuard::STAMP => $guard->stamp(), and an empty, hidden FormGuard::TRAP.
+
+if ( FormGuard::trapped( $_POST[ FormGuard::TRAP ] ?? '' ) ) {
+    return $thanks;                                      // a bot told it failed learns which field gave it away
+}
+
+if ( ! $guard->human( $_POST[ FormGuard::STAMP ] ?? '' ) ) {
+    $problems['started'] = 'That was sent very quickly. Check it and send it again.';
+}
+```
+
+The stamp is signed per form, so it cannot be backdated or carried to another
+form. Neither check is a rate limit; put the form behind one as well.
+
 ## Testing
 
 ```bash
+composer install
 composer test
 ```
+
+81 tests: sessions and their claims, CSRF tokens, where a token was submitted
+and same-origin checks, keyed and derived hashing, sealing, sealing once and
+re-sealing across keys, magic links and their separation from sessions, form
+stamps that are too fast, too late or forged, and that every must-check result
+keeps its `#[\NoDiscard]`.
 
 ## License
 

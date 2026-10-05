@@ -13,7 +13,7 @@ namespace SugarCommerce\WebSecurity\Tests;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
-use SugarCommerce\WebSecurity\{Csrf, Hash, Sealer, Session};
+use SugarCommerce\WebSecurity\{Csrf, FormGuard, Hash, MagicLink, Sealer, Session};
 
 /**
  * Class MustCheckTest
@@ -35,6 +35,12 @@ final class MustCheckTest extends TestCase {
 			'Csrf::verify'          => array( Csrf::class . '::verify' ),
 			'Hash::matches'         => array( Hash::class . '::matches' ),
 			'Sealer::open'          => array( Sealer::class . '::open' ),
+			'Sealer::reseal'        => array( Sealer::class . '::reseal' ),
+			'Csrf::same_origin'     => array( Csrf::class . '::same_origin' ),
+			'FormGuard::human'      => array( FormGuard::class . '::human' ),
+			'FormGuard::trapped'    => array( FormGuard::class . '::trapped' ),
+			'MagicLink::redeem'     => array( MagicLink::class . '::redeem' ),
+			'MagicLink::read'       => array( MagicLink::class . '::read' ),
 		);
 	}
 
