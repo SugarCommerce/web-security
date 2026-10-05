@@ -116,4 +116,83 @@ final readonly class Csrf {
 		// byte, leaking how much of a guess was correct.
 		return hash_equals( $expected, $submitted );
 	}
+
+	/**
+	 * The token a request submitted, wherever it put it.
+	 *
+	 * A form posts it as a hidden field, a script's JSON body may carry it,
+	 * and a fetch() sends it as a header. Never from the query string: a
+	 * token in a URL ends up in access logs, browser history and the
+	 * Referer of the next page, and a leaked token is a forged request.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param array<string, mixed>      $form   The parsed form body.
+	 * @param string                    $header The X-CSRF-Token header's value.
+	 * @param array<string, mixed>|null $json   A parsed JSON body, if any.
+	 *
+	 * @return string The first one present, or ''.
+	 */
+	public static function submitted( array $form, string $header = '', ?array $json = null ): string {
+		foreach ( array( $form[ self::FIELD ] ?? null, $json[ self::FIELD ] ?? null, $header ) as $candidate ) {
+			if ( is_string( $candidate ) && '' !== $candidate ) {
+				return $candidate;
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Whether the browser's own account of where a request came from allows
+	 * it: false only when it named somewhere else.
+	 *
+	 * Browsers send Origin on a cross-site POST, and Referer usually; a page
+	 * cannot forge either. So when one is present and names another host,
+	 * the request is forged, whatever else it carries. When neither is
+	 * present — privacy settings and some proxies strip them — that is not
+	 * evidence either way, which is why this is a first check to pair with
+	 * verify(), never a replacement for it.
+	 *
+	 * Origin wins over Referer when both are sent. Hosts are compared
+	 * exactly, port included: a suffix match lets `notexample.com` through.
+	 * "null", what a sandboxed frame or a privacy redirect sends, names no
+	 * host and so counts as elsewhere.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param string $origin  The Origin header, or ''.
+	 * @param string $referer The Referer header, or ''.
+	 * @param string $host    The host the request arrived on, with any port.
+	 *
+	 * @return bool
+	 */
+	#[\NoDiscard( 'False means another site sent this request.' )]
+	public static function same_origin( string $origin, string $referer, string $host ): bool {
+		$claimed = '' !== $origin ? $origin : $referer;
+
+		return '' === $claimed || self::names_host( $claimed, $host );
+	}
+
+	/**
+	 * Whether a URL names exactly this host.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param string $url  An Origin or Referer.
+	 * @param string $host Host, with any port.
+	 *
+	 * @return bool
+	 */
+	public static function names_host( string $url, string $host ): bool {
+		$parts = parse_url( $url );
+
+		if ( ! is_array( $parts ) || ! isset( $parts['host'] ) || '' === $host ) {
+			return false;
+		}
+
+		$claimed = strtolower( $parts['host'] ) . ( isset( $parts['port'] ) ? ':' . $parts['port'] : '' );
+
+		return $claimed === strtolower( $host );
+	}
 }

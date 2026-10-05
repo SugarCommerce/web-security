@@ -70,4 +70,36 @@ final class CsrfTest extends TestCase {
 	public function test_it_reads_the_cookie_name_it_was_given(): void {
 		$this->assertSame( '', $this->csrf->token( array( 'some_other_cookie' => 'x' ) ) );
 	}
+
+	/* ─── Where the token was put ──────────────────────────────────────── */
+
+	public function test_the_token_is_found_in_a_form_a_json_body_or_a_header(): void {
+		$this->assertSame( 'f', Csrf::submitted( array( Csrf::FIELD => 'f' ), 'h', array( Csrf::FIELD => 'j' ) ) );
+		$this->assertSame( 'j', Csrf::submitted( array(), 'h', array( Csrf::FIELD => 'j' ) ) );
+		$this->assertSame( 'h', Csrf::submitted( array(), 'h' ) );
+		$this->assertSame( '', Csrf::submitted( array( Csrf::FIELD => array( 'not', 'a', 'token' ) ) ) );
+	}
+
+	/* ─── Same origin ──────────────────────────────────────────────────── */
+
+	public function test_a_foreign_origin_is_refused_and_a_missing_one_is_no_evidence(): void {
+		$this->assertTrue( Csrf::same_origin( 'https://shop.example', '', 'shop.example' ) );
+		$this->assertTrue( Csrf::same_origin( '', 'https://shop.example/page?x=1', 'shop.example' ) );
+		$this->assertTrue( Csrf::same_origin( '', '', 'shop.example' ) );
+		$this->assertFalse( Csrf::same_origin( 'https://evil.example', '', 'shop.example' ) );
+		$this->assertFalse( Csrf::same_origin( '', 'https://evil.example/', 'shop.example' ) );
+	}
+
+	public function test_origin_wins_over_referer(): void {
+		$this->assertFalse( Csrf::same_origin( 'https://evil.example', 'https://shop.example/', 'shop.example' ) );
+	}
+
+	public function test_hosts_are_matched_exactly_with_their_port(): void {
+		$this->assertFalse( Csrf::names_host( 'https://notshop.example', 'shop.example' ) );
+		$this->assertFalse( Csrf::names_host( 'https://shop.example.evil.example', 'shop.example' ) );
+		$this->assertFalse( Csrf::names_host( 'http://localhost:9000', 'localhost:8080' ) );
+		$this->assertTrue( Csrf::names_host( 'http://LOCALHOST:8080', 'localhost:8080' ) );
+		$this->assertFalse( Csrf::names_host( 'null', 'shop.example' ), 'A sandboxed frame names no host.' );
+		$this->assertFalse( Csrf::same_origin( 'null', '', 'shop.example' ) );
+	}
 }
