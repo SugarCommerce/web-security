@@ -65,4 +65,24 @@ final class HashTest extends TestCase {
 		$this->assertFalse( $this->hash->matches( '', '' ) );
 		$this->assertFalse( $this->hash->matches( 'anything', '' ) );
 	}
+
+	/* ─── Derived keys ─────────────────────────────────────────────────── */
+
+	/**
+	 * The same key HKDF gives by hand, so digests stored before this
+	 * method existed still match.
+	 */
+	public function test_a_derived_hash_is_keyed_by_hkdf(): void {
+		$by_hand = new Hash( hash_hkdf( 'sha256', 'shared-secret', 32, 'app/email-index' ) );
+
+		$this->assertSame( $by_hand->opaque( 'a@example.com' ), Hash::derived( 'shared-secret', 'app/email-index' )->opaque( 'a@example.com' ) );
+	}
+
+	public function test_two_contexts_never_compare_equal(): void {
+		$this->assertNotSame(
+			Hash::derived( 'shared-secret', 'app/email-index' )->opaque( 'a@example.com' ),
+			Hash::derived( 'shared-secret', 'app/rate-limit' )->opaque( 'a@example.com' )
+		);
+		$this->assertNotSame( ( new Hash( 'shared-secret' ) )->opaque( 'x' ), Hash::derived( 'shared-secret', 'c' )->opaque( 'x' ) );
+	}
 }

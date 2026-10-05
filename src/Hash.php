@@ -44,6 +44,31 @@ final readonly class Hash {
 	) {}
 
 	/**
+	 * A hasher keyed for one purpose, from a secret shared by several.
+	 *
+	 * An application usually has one configured secret. Keying every index
+	 * with it directly means two indexes compare equal across purposes —
+	 * an email's lookup hash would match its rate-limit key — and that
+	 * rotating one rotates all of them without anybody deciding to. HKDF
+	 * gives each purpose its own key, and none of them reveals the secret
+	 * or each other.
+	 *
+	 * Stable: the same secret and context always give the same key, so
+	 * digests stored yesterday still match today.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param string $secret  The shared secret.
+	 * @param string $context What the digests are for, e.g. `app/email-index`.
+	 *                        Different contexts never produce equal digests.
+	 *
+	 * @return self
+	 */
+	public static function derived( #[\SensitiveParameter] string $secret, string $context ): self {
+		return new self( hash_hkdf( 'sha256', $secret, 32, $context ) );
+	}
+
+	/**
 	 * Pseudonymise an IP address.
 	 *
 	 * @since 1.0.0

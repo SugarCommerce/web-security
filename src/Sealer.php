@@ -92,6 +92,67 @@ final readonly class Sealer {
 	}
 
 	/**
+	 * Seal a value unless it already is.
+	 *
+	 * For write paths that are handed a value from either side of a
+	 * migration — a row read and written back, a payload passed through. A
+	 * sealed value sealed again is ciphertext of ciphertext: it opens to
+	 * `s1.…` rather than to the value, and every reader shows that instead.
+	 *
+	 * Already sealed means sealed by anybody: this does not open it to check
+	 * whose key it is under. To move a value to this key, use reseal().
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param string $value Plain or sealed.
+	 *
+	 * @return string Sealed, or '' for ''.
+	 */
+	public function seal_once( #[\SensitiveParameter] string $value ): string {
+		return self::sealed( $value ) ? $value : $this->seal( $value );
+	}
+
+	/**
+	 * Bring a stored value under this key.
+	 *
+	 * The step a key rotation repeats for every sealed column: open the value
+	 * with whichever key sealed it — an old one, or this one when a rotation
+	 * that died part-way already moved it — and seal it again here. A plain
+	 * value, from before the column was sealed at all, is sealed too, so
+	 * after a rotation every value is under the new key.
+	 *
+	 * Safe to run twice: a value this key sealed opens with it and is sealed
+	 * again, with a fresh nonce, to the same plain value.
+	 *
+	 * @since 1.3.0
+	 *
+	 * @param string $value   Stored value.
+	 * @param Sealer ...$from The keys it may be sealed under now. Each is
+	 *                        tried in turn, then this one.
+	 *
+	 * @return string|null The value sealed under this key ('' stays ''), or
+	 *                     null when it is sealed and opens under none of
+	 *                     them. Stop there rather than write: the value is
+	 *                     under a key nobody has, and overwriting it loses it.
+	 */
+	#[\NoDiscard( 'Null means the value opens under none of the keys, and must not be overwritten.' )]
+	public function reseal( string $value, Sealer ...$from ): ?string {
+		if ( ! self::sealed( $value ) ) {
+			return $this->seal( $value );
+		}
+
+		foreach ( array( ...$from, $this ) as $sealer ) {
+			$plain = $sealer->open( $value );
+
+			if ( null !== $plain ) {
+				return $this->seal( $plain );
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Open a sealed value.
 	 *
 	 * @since 1.2.0

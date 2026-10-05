@@ -77,4 +77,52 @@ final class SealerTest extends TestCase {
 
 		new Sealer( 'short' );
 	}
+
+	/* ─── Sealing once ─────────────────────────────────────────────────── */
+
+	public function test_a_sealed_value_is_not_sealed_twice(): void {
+		$sealer = $this->sealer();
+		$sealed = $sealer->seal( 'a@example.com' );
+
+		$this->assertSame( $sealed, $sealer->seal_once( $sealed ) );
+		$this->assertSame( 'a@example.com', $sealer->open( $sealer->seal_once( 'a@example.com' ) ) );
+		$this->assertSame( '', $sealer->seal_once( '' ) );
+	}
+
+	/* ─── Re-sealing ───────────────────────────────────────────────────── */
+
+	public function test_a_value_under_an_old_key_moves_to_the_new_one(): void {
+		$old   = $this->sealer( secret: str_repeat( 'o', 40 ) );
+		$new   = $this->sealer();
+		$moved = $new->reseal( $old->seal( 'a@example.com' ), $old );
+
+		$this->assertSame( 'a@example.com', $new->open( (string) $moved ) );
+		$this->assertNull( $old->open( (string) $moved ) );
+	}
+
+	/**
+	 * A rotation that died part-way is finished by running it again.
+	 */
+	public function test_a_value_already_moved_is_moved_again_harmlessly(): void {
+		$old = $this->sealer( secret: str_repeat( 'o', 40 ) );
+		$new = $this->sealer();
+
+		$this->assertSame( 'a@example.com', $new->open( (string) $new->reseal( $new->seal( 'a@example.com' ), $old ) ) );
+	}
+
+	public function test_a_plain_value_is_sealed_and_nothing_stays_nothing(): void {
+		$new = $this->sealer();
+
+		$this->assertSame( 'legacy@example.com', $new->open( (string) $new->reseal( 'legacy@example.com' ) ) );
+		$this->assertSame( '', $new->reseal( '' ) );
+	}
+
+	/**
+	 * Under a key nobody has: overwriting it would lose it.
+	 */
+	public function test_a_value_no_key_opens_is_refused(): void {
+		$lost = $this->sealer( secret: str_repeat( 'z', 40 ) )->seal( 'a@example.com' );
+
+		$this->assertNull( $this->sealer()->reseal( $lost, $this->sealer( secret: str_repeat( 'o', 40 ) ) ) );
+	}
 }
