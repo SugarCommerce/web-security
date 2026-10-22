@@ -37,6 +37,8 @@ namespace SugarCommerce\WebSecurity;
  */
 final readonly class Flash {
 
+	use ShortCookie;
+
 	/**
 	 * HKDF context the signing key is derived under.
 	 */
@@ -47,10 +49,6 @@ final readonly class Flash {
 	 */
 	public const int MAX_LENGTH = 200;
 
-	/**
-	 * What a cookie name may be: an RFC 9110 token.
-	 */
-	private const string TOKEN = '/^[A-Za-z0-9!#$%&\'*+\-.^_`|~]+$/D';
 
 	/**
 	 * The key messages are signed with, or '' when there is no secret.
@@ -92,15 +90,7 @@ final readonly class Flash {
 		private int $lifetime = 30,
 		array $kinds = array( 'ok', 'err' ),
 	) {
-		if ( 1 !== preg_match( self::TOKEN, $cookie ) ) {
-			throw new \InvalidArgumentException( 'Invalid cookie name: ' . json_encode( $cookie ) );
-		}
-
-		// A separator or a control character in the path would add
-		// attributes, or a header, of its own.
-		if ( ! str_starts_with( $path, '/' ) || 1 === preg_match( '/[\x00-\x20\x7F;,]/', $path ) ) {
-			throw new \InvalidArgumentException( 'Invalid cookie path: ' . json_encode( $path ) );
-		}
+		self::check_cookie( $cookie, $path );
 
 		if ( $lifetime < 1 ) {
 			throw new \InvalidArgumentException( 'A flash message has to last at least a second.' );
@@ -221,21 +211,9 @@ final readonly class Flash {
 	 *                                                   malformed.
 	 */
 	public function take( ?array $cookies = null, bool $secure = false ): ?array {
-		$jar = $cookies ?? $_COOKIE;
+		$value = $this->take_value( $cookies, $secure );
 
-		if ( ! array_key_exists( $this->cookie, $jar ) ) {
-			return null;
-		}
-
-		header( 'Set-Cookie: ' . $this->clear_header( $secure ), false );
-
-		if ( null === $cookies ) {
-			unset( $_COOKIE[ $this->cookie ] );
-		}
-
-		$value = $jar[ $this->cookie ];
-
-		return is_string( $value ) ? $this->open( $value ) : null;
+		return null === $value ? null : $this->open( $value );
 	}
 
 	/**
@@ -293,27 +271,6 @@ final readonly class Flash {
 			'kind'    => $kind,
 			'message' => $message,
 		);
-	}
-
-	/**
-	 * A Set-Cookie value for this cookie.
-	 *
-	 * @since 1.5.0
-	 *
-	 * @param string $value   Cookie value. Base64url and a hex signature,
-	 *                        so nothing in it needs encoding.
-	 * @param int    $expires Unix time it expires.
-	 * @param bool   $secure  Whether to mark it Secure.
-	 *
-	 * @return string
-	 */
-	private function line( string $value, int $expires, bool $secure ): string {
-		return $this->cookie . '=' . $value
-			. '; Expires=' . gmdate( 'D, d M Y H:i:s \G\M\T', $expires )
-			. '; Max-Age=' . max( 0, $expires - time() )
-			. '; Path=' . $this->path
-			. ( $secure ? '; Secure' : '' )
-			. '; HttpOnly; SameSite=Lax';
 	}
 
 	/**

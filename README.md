@@ -255,6 +255,21 @@ plain-HTTP development host is dropped without a word.
 sending them, for tests and for a response object that carries its own headers.
 Nothing here depends on one.
 
+## Showing a secret once
+
+A handler that mints something to copy — an API key, a sign-in link — redirects, and the next page shows it once. In the redirect URL it would sit in browser history, access logs and Referer headers; `Flash` is signed, not encrypted, and one short line. `Reveal` seals it into a cookie that lasts a minute and is cleared the first time it is read.
+
+```php
+$reveal = new Reveal( $token_secret, 'reveal', '/admin' );
+
+$reveal->set( array( 'url' => $link, 'customer' => $id ), $secure );   // then redirect
+
+$shown = $reveal->take( secure: $secure );                             // on the next page
+if ( null !== $shown && $id === $shown['customer'] ) { /* show $shown['url'] */ }
+```
+
+Values are strings, numbers, booleans or null, up to 2 KB of JSON. Check that what comes back belongs to the page showing it: the cookie is tied to a path, not a URL.
+
 ## Sealing values at rest
 
 ```php
@@ -354,10 +369,10 @@ composer install
 composer test
 ```
 
-103 tests: sessions, their claims, their generations and their key derivation,
+133 tests: sessions, their claims, their generations and their key derivation,
 CSRF tokens and their derived key, where a token was submitted and same-origin
 checks, keyed and derived hashing, sealing, sealing once and re-sealing across
-keys, magic links, their identifiers and their separation from sessions, form stamps that are too fast, too late or forged, and that every
+keys, magic links, their identifiers and their separation from sessions, reveals that are encrypted, shown once and refused when tampered with or expired, form stamps that are too fast, too late or forged, and that every
 must-check result keeps its `#[\NoDiscard]`.
 
 ## License
