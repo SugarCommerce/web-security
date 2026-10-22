@@ -1,11 +1,12 @@
 # web-security
 
 Signed-cookie sessions for a single shared password, passwordless sign-in
-links, CSRF tokens with nothing to store, bot resistance for public forms
-without a captcha, sealing for values at rest, and keyed hashing for the values
-an application has to compare but should never be able to read back.
+links, CSRF tokens with nothing to store, signed one-shot flash messages, bot
+resistance for public forms without a captcha, sealing for values at rest, and
+keyed hashing for the values an application has to compare but should never be
+able to read back.
 
-Six small classes. No framework, no container, no middleware stack.
+Seven small classes. No framework, no container, no middleware stack.
 
 For cleaning and validating the input itself, see
 [sanitize](https://github.com/sugarcommerce/sanitize), which this deliberately
@@ -210,6 +211,49 @@ the victim to submit a password the attacker does not have.
 An empty token means *always fail*, never *no check needed*. `verify()` already
 reads it that way; anything calling `token()` directly has to make the same
 choice.
+
+## Flash messages
+
+Post, redirect, get: the form handler does its work and redirects, and the page
+it lands on says how it went. A `?saved=1` in the URL is one anybody can type
+and link to — "Refund sent" on a page that refunded nothing — so the message
+travels as a signed cookie instead.
+
+```php
+use SugarCommerce\WebSecurity\Flash;
+
+$flash = new Flash( $token_secret ); // cookie 'flash', path '/', 30 seconds, kinds ok|err
+
+// The handler
+$flash->set( 'ok', 'Refund sent.', $is_https );
+// …then redirect
+
+// The page after
+$message = $flash->take( secure: $is_https ); // array{kind, message}, or null
+
+if ( null !== $message ) {
+    printf( '<p class="flash-%s">%s</p>', $message['kind'], htmlspecialchars( $message['message'] ) );
+}
+```
+
+The signature is an HMAC under a key derived from the secret with its own HKDF
+context, never the secret itself, for the reason Csrf gives. The expiry is
+inside what is signed, so a captured cookie stops working when it would have
+expired whatever the browser was told. `take()` checks it in constant time and
+returns null for anything missing, forged, tampered with, expired, malformed or
+sent as an array — and clears the cookie whenever one was sent at all, good or
+bad, so a message shows once. Reading from `$_COOKIE`, it removes it there too.
+
+A kind not in the list becomes the first one. The message is plain text: line
+breaks become spaces, control characters go, and it is cut to 200 characters
+(not bytes). It is signed, not safe — escape it when you print it. An empty
+secret sets nothing and accepts nothing. The cookie is HttpOnly and
+`SameSite=Lax`; pass `$is_https` from the request, because a Secure cookie on a
+plain-HTTP development host is dropped without a word.
+
+`cookie_header()` and `clear_header()` give the Set-Cookie lines without
+sending them, for tests and for a response object that carries its own headers.
+Nothing here depends on one.
 
 ## Sealing values at rest
 

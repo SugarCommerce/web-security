@@ -1,6 +1,6 @@
 {
   "name": "sugarcommerce/web-security",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Signed-cookie sessions for a single shared password, CSRF tokens with nothing to store, and keyed hashing for the values an application must compare but never read back.",
   "type": "library",
   "license": "GPL-2.0-or-later",
