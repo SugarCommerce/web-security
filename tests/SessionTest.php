@@ -10,7 +10,7 @@ declare( strict_types=1 );
 namespace SugarCommerce\WebSecurity\Tests;
 
 use PHPUnit\Framework\TestCase;
-use SugarCommerce\SignedTokens\{Reason, Token};
+use SugarCommerce\SignedTokens\{Reason, Token, TokenSigner};
 use SugarCommerce\WebSecurity\Session;
 
 /**
@@ -51,6 +51,75 @@ final class SessionTest extends TestCase {
 		$cookie = $before->issue();
 
 		$this->assertFalse( ( new Session( 'rotated-password-value' ) )->valid( $cookie ) );
+	}
+
+	public function test_a_session_verifies_under_the_generation_it_was_issued_in(): void {
+		$cookie = ( new Session( self::PASSWORD, generation: 7 ) )->issue();
+
+		$this->assertTrue( ( new Session( self::PASSWORD, generation: 7 ) )->valid( $cookie ) );
+	}
+
+	public function test_incrementing_the_generation_ends_every_session(): void {
+		$cookie = ( new Session( self::PASSWORD, generation: 7 ) )->issue();
+		$after  = new Session( self::PASSWORD, generation: 8 );
+
+		// Refused as a bad signature, never as expired: being signed out is
+		// not something waiting longer would have avoided.
+		$this->assertFalse( $after->valid( $cookie ) );
+		$this->assertSame( Reason::InvalidSignature, $after->read( $cookie ) );
+	}
+
+	public function test_going_back_a_generation_does_not_revive_newer_sessions(): void {
+		$cookie = ( new Session( self::PASSWORD, generation: 8 ) )->issue();
+
+		$this->assertFalse( ( new Session( self::PASSWORD, generation: 7 ) )->valid( $cookie ) );
+	}
+
+	/**
+	 * The generation is in the key, not the cookie, so there is no field to
+	 * edit — and nothing a holder can change carries a cookie across.
+	 */
+	public function test_a_cookie_cannot_be_edited_into_another_generation(): void {
+		$old     = new Session( self::PASSWORD, generation: 1 );
+		$current = new Session( self::PASSWORD, generation: 2 );
+		$cookie  = $old->issue( array( 'generation' => 2, 'gen' => 2 ) );
+
+		$this->assertFalse( $current->valid( $cookie ) );
+
+		[ $payload, $expiry, $signature ] = explode( '.', $cookie );
+		$forged = rtrim( strtr( base64_encode( (string) json_encode( array( 'sub' => 'operator', 'generation' => 2 ) ) ), '+/', '-_' ), '=' );
+
+		foreach ( array(
+			$forged . '.' . $expiry . '.' . $signature,
+			$payload . '.' . ( (int) $expiry + 1 ) . '.' . $signature,
+			$payload . '.' . $expiry . '.' . str_repeat( '0', strlen( $signature ) ),
+		) as $tampered ) {
+			$this->assertFalse( $current->valid( $tampered ) );
+			$this->assertFalse( $old->valid( $tampered ) );
+		}
+	}
+
+	public function test_without_a_generation_sessions_are_as_they_were(): void {
+		// A cookie signed exactly as 1.3.0 signed it, before generations.
+		$signer = new TokenSigner( hash_hmac( 'sha256', 'web-security/session/v1', self::PASSWORD ) );
+		$cookie = $signer->sign( 'web-security.session', array( 'sub' => 'operator' ), 60 );
+
+		$this->assertTrue( ( new Session( self::PASSWORD ) )->valid( $cookie ) );
+		$this->assertTrue( ( new Session( self::PASSWORD, generation: 0 ) )->valid( $cookie ) );
+		$this->assertTrue( ( new Session( self::PASSWORD, generation: 0 ) )->valid( ( new Session( self::PASSWORD ) )->issue() ) );
+		$this->assertFalse( ( new Session( self::PASSWORD, generation: 1 ) )->valid( $cookie ) );
+	}
+
+	public function test_rotating_the_password_still_ends_every_session_in_a_generation(): void {
+		$cookie = ( new Session( self::PASSWORD, generation: 3 ) )->issue();
+
+		$this->assertFalse( ( new Session( 'rotated-password-value', generation: 3 ) )->valid( $cookie ) );
+	}
+
+	public function test_a_negative_generation_is_a_programming_error(): void {
+		$this->expectException( \InvalidArgumentException::class );
+
+		new Session( self::PASSWORD, generation: -1 );
 	}
 
 	public function test_a_session_expires(): void {

@@ -24,6 +24,18 @@ use SugarCommerce\SignedTokens\{Reason, Token, TokenSigner};
  * session for free, because the password is what the signing key is derived
  * from — an old cookie stops verifying the moment it changes.
  *
+ * Signing everyone out should not need a new password, so the key is derived
+ * from a generation as well: a number the application keeps — a row in its
+ * settings table is enough — and passes in on every request. Incrementing it
+ * ends every session issued under the old one, exactly as rotating the
+ * password would, and the password stays the same. The generation is never
+ * written into the cookie, so there is nothing in it to edit: a cookie from
+ * an older generation fails as a bad signature, before anything in it is
+ * read. The increment has to be durable before the response that announces
+ * it goes out, or a crash in between leaves every session it was meant to
+ * end still valid. Generation 0 derives the same key as before there were
+ * generations, so cookies issued without one keep verifying.
+ *
  * The signing itself is TokenSigner rather than a hand-rolled HMAC. That
  * matters for more than tidiness: it checks the signature before the expiry,
  * so a forged cookie can never come back as "expired" and tell its forger the
@@ -68,14 +80,25 @@ final readonly class Session {
 	private ?TokenSigner $signer;
 
 	/**
-	 * @param string   $password  The shared password. '' means "no password
-	 *                            set", which makes every check fail rather
-	 *                            than every check pass — see configured().
-	 * @param string   $subject   What the session says it is. Recorded in the
-	 *                            payload and checked on the way back, so two
-	 *                            roles signed with the same key stay distinct.
-	 * @param int      $lifetime  Seconds a session lasts.
-	 * @param int|null $timestamp Fixed clock, for tests.
+	 * @since 1.0.0
+	 * @since 1.4.0 Takes a generation.
+	 *
+	 * @param string   $password   The shared password. '' means "no password
+	 *                             set", which makes every check fail rather
+	 *                             than every check pass — see configured().
+	 * @param string   $subject    What the session says it is. Recorded in the
+	 *                             payload and checked on the way back, so two
+	 *                             roles signed with the same key stay distinct.
+	 * @param int      $lifetime   Seconds a session lasts.
+	 * @param int|null $timestamp  Fixed clock, for tests.
+	 * @param int      $generation Which generation of sessions is current.
+	 *                             Stored by the application and incremented to
+	 *                             sign everyone out; a cookie issued under any
+	 *                             other generation does not verify. 0, the
+	 *                             default, is what every session was before
+	 *                             there were generations.
+	 *
+	 * @throws \InvalidArgumentException When the generation is negative.
 	 */
 	public function __construct(
 		#[\SensitiveParameter]
@@ -83,10 +106,15 @@ final readonly class Session {
 		private string $subject = 'operator',
 		private int $lifetime = self::LIFETIME,
 		?int $timestamp = null,
+		int $generation = 0,
 	) {
+		if ( $generation < 0 ) {
+			throw new \InvalidArgumentException( 'A session generation cannot be negative.' );
+		}
+
 		$this->signer = '' === $password
 			? null
-			: new TokenSigner( self::derive( $password ), timestamp: $timestamp );
+			: new TokenSigner( self::derive( $password, $generation ), timestamp: $timestamp );
 	}
 
 	/**
@@ -266,15 +294,25 @@ final readonly class Session {
 	}
 
 	/**
-	 * Derive a signing key from a password.
+	 * Derive a signing key from a password and a generation.
+	 *
+	 * Generation 0 is the bare context, byte for byte the key from before
+	 * there were generations, so cookies already out there keep verifying.
+	 * Every other generation is its own context, and so its own key.
 	 *
 	 * @since 1.0.0
+	 * @since 1.4.0 Takes a generation.
 	 *
-	 * @param string $password The shared password.
+	 * @param string $password   The shared password.
+	 * @param int    $generation Which generation of sessions is current.
 	 *
 	 * @return string 64 hex characters.
 	 */
-	private static function derive( #[\SensitiveParameter] string $password ): string {
-		return hash_hmac( 'sha256', self::KDF_CONTEXT, $password );
+	private static function derive( #[\SensitiveParameter] string $password, int $generation ): string {
+		$context = 0 === $generation
+			? self::KDF_CONTEXT
+			: self::KDF_CONTEXT . '/generation/' . $generation;
+
+		return hash_hmac( 'sha256', $context, $password );
 	}
 }

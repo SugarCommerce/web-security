@@ -89,6 +89,28 @@ shared between workers, nothing to make sticky behind a load balancer. Rotating
 the password ends every existing session for free, because the signing key is
 derived from it.
 
+To sign everyone out without changing the password, keep a generation — an
+integer the application stores, a row in its settings table is enough — and
+pass it in:
+
+```php
+$session = new Session( $password, subject: 'operator', generation: $settings->get( 'session_generation', 0 ) );
+
+// Sign everyone out:
+$settings->set( 'session_generation', $settings->get( 'session_generation', 0 ) + 1 );   // durable first
+setcookie( Session::COOKIE, '', Session::clear_options( '/admin' ) );
+```
+
+The signing key is derived from the password and the generation together, so
+incrementing it ends every session issued under the old one, exactly as
+rotating the password would. Nothing about it is written into the cookie, so
+there is nothing to edit: a cookie from an older generation is refused as a bad
+signature — `Reason::InvalidSignature`, never `Expired` — before anything in it
+is read. Make the increment durable before responding, or a crash in between
+leaves every session it was meant to end still valid. Generation `0`, the
+default, derives the same key as before there were generations, so an
+application that never passes one sees no change.
+
 The signing is [signed-tokens](https://github.com/sugarcommerce/signed-tokens)
 rather than a hand-rolled HMAC, which buys two things beyond tidiness. The
 signature is checked before the expiry, so a forged cookie can never come back
@@ -253,11 +275,11 @@ composer install
 composer test
 ```
 
-81 tests: sessions and their claims, CSRF tokens, where a token was submitted
-and same-origin checks, keyed and derived hashing, sealing, sealing once and
-re-sealing across keys, magic links and their separation from sessions, form
-stamps that are too fast, too late or forged, and that every must-check result
-keeps its `#[\NoDiscard]`.
+88 tests: sessions, their claims and their generations, CSRF tokens, where a
+token was submitted and same-origin checks, keyed and derived hashing, sealing,
+sealing once and re-sealing across keys, magic links and their separation from
+sessions, form stamps that are too fast, too late or forged, and that every
+must-check result keeps its `#[\NoDiscard]`.
 
 ## License
 
