@@ -69,7 +69,7 @@ final readonly class Session {
 	/**
 	 * Namespace the cookie is signed under.
 	 */
-	private const string NAMESPACE = 'web-security.session';
+	private const string TOKEN_NAMESPACE = 'web-security.session';
 
 	/**
 	 * Separates the password from the signing key derived from it.
@@ -205,7 +205,7 @@ final readonly class Session {
 		}
 
 		return $this->signer->sign(
-			self::NAMESPACE,
+			self::TOKEN_NAMESPACE,
 			// Subject first: `+` keeps the left side's keys, so a caller
 			// passing their own `sub` cannot mint a session for another role.
 			array( 'sub' => $this->subject ) + $claims,
@@ -251,7 +251,7 @@ final readonly class Session {
 			return Reason::Malformed;
 		}
 
-		$result = $this->signer->inspect( self::NAMESPACE, $cookie );
+		$result = $this->signer->inspect( self::TOKEN_NAMESPACE, $cookie );
 
 		if ( ! $result instanceof Token ) {
 			return $result;
