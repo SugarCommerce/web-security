@@ -28,6 +28,14 @@ namespace SugarCommerce\WebSecurity;
  * "the form said my session expired but I was right here". One HMAC of one
  * value is the whole of it.
  *
+ * The HMAC is keyed with a key derived from the secret, never with the
+ * secret itself. token() answers for whatever cookie a request sends, signed
+ * in or not, so it hashes a value the caller chooses — and an application
+ * usually hands the same secret to Hash, to Session, to its own key
+ * derivations. Keyed with the bare secret, as it was before 1.4, a request
+ * with its cookie set to some other construction's input got that
+ * construction's output printed into the form.
+ *
  * Login is deliberately exempt. There is no session yet, and forging a login
  * request only forces the victim to submit a password the attacker does not
  * have.
@@ -37,23 +45,57 @@ namespace SugarCommerce\WebSecurity;
 final readonly class Csrf {
 
 	/**
-	 * Form field and header name carrying the token.
+	 * Form field carrying the token.
 	 */
 	public const string FIELD = '_csrf';
+
+	/**
+	 * Header carrying the token, lower-cased.
+	 */
 	public const string HEADER = 'x-csrf-token';
 
 	/**
+	 * HKDF context the token key is derived under.
+	 */
+	private const string KDF_CONTEXT = 'web-security/csrf/v1';
+
+	/**
+	 * The key tokens are signed with, or '' when there is no secret.
+	 */
+	private string $key;
+
+	/**
+	 * @since 1.0.0
+	 * @since 1.4.0 Signs with a key derived from the secret.
+	 *
 	 * @param string $secret      Signing key. Use the application's general
 	 *                            token secret, not the password behind the
 	 *                            session — rotating one should not silently
-	 *                            invalidate the other.
+	 *                            invalidate the other. '' means there is no
+	 *                            token, so every check fails.
 	 * @param string $cookie_name Session cookie the token is derived from.
 	 */
 	public function __construct(
 		#[\SensitiveParameter]
-		private string $secret,
+		string $secret,
 		private string $cookie_name = Session::COOKIE,
-	) {}
+	) {
+		$this->key = '' === $secret ? '' : hash_hkdf( 'sha256', $secret, 32, self::KDF_CONTEXT );
+	}
+
+	/**
+	 * Keep the key out of `var_dump()` and `print_r()`.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return array{key: string, cookie_name: string}
+	 */
+	public function __debugInfo(): array {
+		return array(
+			'key'         => '[redacted]',
+			'cookie_name' => $this->cookie_name,
+		);
+	}
 
 	/**
 	 * The token for the current session, or '' when there is no session.
@@ -62,18 +104,26 @@ final readonly class Csrf {
 	 * check needed". verify() already does; anything reading token() directly
 	 * has to make the same choice.
 	 *
+	 * A cookie that is not a string — `name[]=x` arrives as an array — is no
+	 * session. Cast, it would be the string "Array" for everybody, and so
+	 * one token anybody could read off their own page.
+	 *
 	 * @since 1.0.0
 	 *
-	 * @param array<string, string>|null $cookies Cookie jar. Defaults to
-	 *                                            $_COOKIE; passed explicitly
-	 *                                            by tests.
+	 * @param array<string, mixed>|null $cookies Cookie jar. Defaults to
+	 *                                           $_COOKIE; passed explicitly
+	 *                                           by tests.
 	 *
 	 * @return string
 	 */
 	public function token( ?array $cookies = null ): string {
-		$cookie = (string) ( ( $cookies ?? $_COOKIE )[ $this->cookie_name ] ?? '' );
+		$cookie = ( $cookies ?? $_COOKIE )[ $this->cookie_name ] ?? '';
 
-		return '' === $cookie ? '' : hash_hmac( 'sha256', $cookie, $this->secret );
+		if ( ! is_string( $cookie ) || '' === $cookie || '' === $this->key ) {
+			return '';
+		}
+
+		return hash_hmac( 'sha256', $cookie, $this->key );
 	}
 
 	/**
@@ -81,7 +131,7 @@ final readonly class Csrf {
 	 *
 	 * @since 1.0.0
 	 *
-	 * @param array<string, string>|null $cookies Cookie jar. Defaults to $_COOKIE.
+	 * @param array<string, mixed>|null $cookies Cookie jar. Defaults to $_COOKIE.
 	 *
 	 * @return string HTML.
 	 */
@@ -98,9 +148,9 @@ final readonly class Csrf {
 	 *
 	 * @since 1.0.0
 	 *
-	 * @param string                     $submitted The value from the form
-	 *                                              field or the header.
-	 * @param array<string, string>|null $cookies   Cookie jar. Defaults to $_COOKIE.
+	 * @param string                    $submitted The value from the form
+	 *                                             field or the header.
+	 * @param array<string, mixed>|null $cookies   Cookie jar. Defaults to $_COOKIE.
 	 *
 	 * @return bool
 	 */

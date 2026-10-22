@@ -99,15 +99,40 @@ final class SessionTest extends TestCase {
 		}
 	}
 
-	public function test_without_a_generation_sessions_are_as_they_were(): void {
-		// A cookie signed exactly as 1.3.0 signed it, before generations.
-		$signer = new TokenSigner( hash_hmac( 'sha256', 'web-security/session/v1', self::PASSWORD ) );
-		$cookie = $signer->sign( 'web-security.session', array( 'sub' => 'operator' ), 60 );
-
-		$this->assertTrue( ( new Session( self::PASSWORD ) )->valid( $cookie ) );
-		$this->assertTrue( ( new Session( self::PASSWORD, generation: 0 ) )->valid( $cookie ) );
+	public function test_without_a_generation_it_is_generation_zero(): void {
 		$this->assertTrue( ( new Session( self::PASSWORD, generation: 0 ) )->valid( ( new Session( self::PASSWORD ) )->issue() ) );
-		$this->assertFalse( ( new Session( self::PASSWORD, generation: 1 ) )->valid( $cookie ) );
+		$this->assertFalse( ( new Session( self::PASSWORD, generation: 1 ) )->valid( ( new Session( self::PASSWORD ) )->issue() ) );
+	}
+
+	/**
+	 * Up to 1.3 the key was HMAC( password, context ): exactly a keyed hash
+	 * of a string anybody can choose, under the secret an application
+	 * tends to hand to everything. Hash::opaque() of that string, or the
+	 * old Csrf::token() for a cookie set to it, printed the signing key.
+	 */
+	public function test_the_signing_key_is_no_keyed_hash_of_a_chosen_value(): void {
+		$keyed = hash_hmac( 'sha256', 'web-security/session/v1', self::PASSWORD );
+
+		$this->assertSame( $keyed, ( new \SugarCommerce\WebSecurity\Hash( self::PASSWORD ) )->opaque( 'web-security/session/v1' ) );
+
+		$forged = ( new TokenSigner( $keyed ) )->sign( 'web-security.session', array( 'sub' => 'operator' ), 60 );
+
+		$this->assertFalse( ( new Session( self::PASSWORD ) )->valid( $forged ) );
+		$this->assertSame( Reason::InvalidSignature, ( new Session( self::PASSWORD ) )->read( $forged ) );
+	}
+
+	public function test_a_server_secret_is_part_of_the_key(): void {
+		$cookie = ( new Session( self::PASSWORD, secret: 'server-side-pepper' ) )->issue();
+
+		$this->assertTrue( ( new Session( self::PASSWORD, secret: 'server-side-pepper' ) )->valid( $cookie ) );
+		$this->assertFalse( ( new Session( self::PASSWORD ) )->valid( $cookie ), 'The password alone does not sign it.' );
+		$this->assertFalse( ( new Session( self::PASSWORD, secret: 'another-pepper' ) )->valid( $cookie ) );
+	}
+
+	public function test_a_lifetime_under_a_second_is_a_programming_error(): void {
+		$this->expectException( \InvalidArgumentException::class );
+
+		new Session( self::PASSWORD, lifetime: 0 );
 	}
 
 	public function test_rotating_the_password_still_ends_every_session_in_a_generation(): void {
@@ -210,6 +235,20 @@ final class SessionTest extends TestCase {
 
 	public function test_authenticate_rejects_an_empty_submission(): void {
 		$this->assertFalse( ( new Session( self::PASSWORD ) )->authenticate( '' ) );
+	}
+
+	public function test_authenticate_rejects_a_prefix_or_an_extension(): void {
+		$session = new Session( 'pw' );
+
+		$this->assertFalse( $session->authenticate( 'p' ) );
+		$this->assertFalse( $session->authenticate( 'pw ' ) );
+	}
+
+	public function test_dumping_a_session_does_not_print_the_password(): void {
+		$dump = print_r( new Session( self::PASSWORD ), true );
+
+		$this->assertStringNotContainsString( self::PASSWORD, $dump );
+		$this->assertStringContainsString( '[redacted]', $dump );
 	}
 
 	public function test_the_cookie_is_httponly_and_strict(): void {

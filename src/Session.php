@@ -33,8 +33,22 @@ use SugarCommerce\SignedTokens\{Reason, Token, TokenSigner};
  * an older generation fails as a bad signature, before anything in it is
  * read. The increment has to be durable before the response that announces
  * it goes out, or a crash in between leaves every session it was meant to
- * end still valid. Generation 0 derives the same key as before there were
- * generations, so cookies issued without one keep verifying.
+ * end still valid.
+ *
+ * The key is HKDF of the password, not an HMAC keyed with it. Up to 1.3 it
+ * was `HMAC( password, "web-security/session/v1" )` — the same function as
+ * Hash::opaque() and, before 1.4, Csrf::token() under that secret, both of
+ * which hash a value the caller chooses. An application that handed one
+ * secret to all three, which is the natural thing to do with "the token
+ * secret", had a page that would print its session signing key for anybody
+ * who sent the right cookie. HKDF is a different function of the secret, so
+ * no keyed hash of anything equals it. The cost is that 1.4.0 signs
+ * everybody out once, on upgrade.
+ *
+ * A captured cookie is enough to test password guesses offline against —
+ * the key is a fast hash of the password, and the cookie is signed with it.
+ * Where the password is something a person chose, pass a server-side
+ * `$secret` as well: it is mixed into the key, so guessing needs it too.
  *
  * The signing itself is TokenSigner rather than a hand-rolled HMAC. That
  * matters for more than tidiness: it checks the signature before the expiry,
@@ -72,7 +86,7 @@ final readonly class Session {
 	 * moderation queue, short enough that a forgotten laptop is not
 	 * indefinite access.
 	 */
-	public const LIFETIME = 43200; // 12 hours.
+	public const int LIFETIME = 43200; // 12 hours.
 
 	/**
 	 * The signer, or null when no password is configured.
@@ -94,11 +108,15 @@ final readonly class Session {
 	 * @param int      $generation Which generation of sessions is current.
 	 *                             Stored by the application and incremented to
 	 *                             sign everyone out; a cookie issued under any
-	 *                             other generation does not verify. 0, the
-	 *                             default, is what every session was before
-	 *                             there were generations.
+	 *                             other generation does not verify. 0 is the
+	 *                             default.
+	 * @param string   $secret     A server-side secret mixed into the signing
+	 *                             key, so a captured cookie cannot be used to
+	 *                             guess the password offline. '' for none;
+	 *                             changing it signs everyone out.
 	 *
-	 * @throws \InvalidArgumentException When the generation is negative.
+	 * @throws \InvalidArgumentException When the lifetime is under a second
+	 *                                   or the generation is negative.
 	 */
 	public function __construct(
 		#[\SensitiveParameter]
@@ -107,14 +125,39 @@ final readonly class Session {
 		private int $lifetime = self::LIFETIME,
 		?int $timestamp = null,
 		int $generation = 0,
+		#[\SensitiveParameter]
+		string $secret = '',
 	) {
+		if ( $lifetime < 1 ) {
+			throw new \InvalidArgumentException( 'A session must last at least a second.' );
+		}
+
 		if ( $generation < 0 ) {
 			throw new \InvalidArgumentException( 'A session generation cannot be negative.' );
 		}
 
 		$this->signer = '' === $password
 			? null
-			: new TokenSigner( self::derive( $password, $generation ), timestamp: $timestamp );
+			: new TokenSigner( self::derive( $password, $generation, $secret ), timestamp: $timestamp );
+	}
+
+	/**
+	 * Keep the password out of `var_dump()` and `print_r()`.
+	 *
+	 * Both would otherwise print it, and a dumped object is what ends up in
+	 * a log or pasted into a bug report.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return array{password: string, subject: string, lifetime: int, configured: bool}
+	 */
+	public function __debugInfo(): array {
+		return array(
+			'password'   => '[redacted]',
+			'subject'    => $this->subject,
+			'lifetime'   => $this->lifetime,
+			'configured' => $this->configured(),
+		);
 	}
 
 	/**
@@ -148,11 +191,13 @@ final readonly class Session {
 	 * @since 1.0.0
 	 * @since 1.1.0 Takes claims.
 	 *
-	 * @param array<string, scalar> $claims Extra values to sign into it.
+	 * @param array<string, string|int|bool> $claims Extra values to sign into it.
 	 *
 	 * @return string The cookie value.
 	 *
-	 * @throws \LogicException When no password is configured.
+	 * @throws \LogicException           When no password is configured.
+	 * @throws \InvalidArgumentException When a claim is not a string, int
+	 *                                   or bool.
 	 */
 	public function issue( array $claims = array() ): string {
 		if ( null === $this->signer ) {
@@ -224,6 +269,10 @@ final readonly class Session {
 	 * usable oracle for guessing. The delay is on failure only: making the
 	 * success path slow too would punish the one person who is allowed in.
 	 *
+	 * Digests are compared rather than the strings themselves: hash_equals()
+	 * returns at once when the lengths differ, which over enough attempts
+	 * says how long the password is.
+	 *
 	 * @since 1.0.0
 	 *
 	 * @param string $submitted What was typed.
@@ -236,7 +285,7 @@ final readonly class Session {
 			return false;
 		}
 
-		if ( hash_equals( $this->password, $submitted ) ) {
+		if ( hash_equals( hash( 'sha256', $this->password ), hash( 'sha256', $submitted ) ) ) {
 			return true;
 		}
 
@@ -265,7 +314,7 @@ final readonly class Session {
 	 *                         form appears to do nothing.
 	 * @param string $path     Path the cookie is confined to.
 	 *
-	 * @return array<string, mixed> For setcookie()'s options argument.
+	 * @return array{expires: int, path: string, secure: bool, httponly: true, samesite: 'Strict'} For setcookie()'s options argument.
 	 */
 	public function cookie_options( bool $is_https, string $path = '/' ): array {
 		return array(
@@ -287,32 +336,40 @@ final readonly class Session {
 	 *
 	 * @param string $path The path it was set at.
 	 *
-	 * @return array<string, mixed> For setcookie()'s options argument.
+	 * @return array{expires: int, path: string} For setcookie()'s options argument.
 	 */
 	public static function clear_options( string $path = '/' ): array {
 		return array( 'expires' => 1, 'path' => $path );
 	}
 
 	/**
-	 * Derive a signing key from a password and a generation.
+	 * Derive a signing key from a password, a generation and a secret.
 	 *
-	 * Generation 0 is the bare context, byte for byte the key from before
-	 * there were generations, so cookies already out there keep verifying.
-	 * Every other generation is its own context, and so its own key.
+	 * HKDF-SHA256, with the password as the input key material, the secret
+	 * as the salt, and the context — the generation appended to it for any
+	 * generation but 0 — as the info. Every generation is its own context,
+	 * and so its own key.
+	 *
+	 * Not `HMAC( password, context )`, which is what this was up to 1.3:
+	 * that is exactly what a keyed hash of the string `context` under the
+	 * same secret gives, so anything that would hash a caller's chosen value
+	 * under it — Hash::opaque(), Csrf::token() before 1.4 — could be made to
+	 * print this key.
 	 *
 	 * @since 1.0.0
-	 * @since 1.4.0 Takes a generation.
+	 * @since 1.4.0 Takes a generation and a secret, and uses HKDF.
 	 *
-	 * @param string $password   The shared password.
+	 * @param string $password   The shared password. Not empty.
 	 * @param int    $generation Which generation of sessions is current.
+	 * @param string $secret     Server-side salt, or ''.
 	 *
 	 * @return string 64 hex characters.
 	 */
-	private static function derive( #[\SensitiveParameter] string $password, int $generation ): string {
+	private static function derive( #[\SensitiveParameter] string $password, int $generation, #[\SensitiveParameter] string $secret ): string {
 		$context = 0 === $generation
 			? self::KDF_CONTEXT
 			: self::KDF_CONTEXT . '/generation/' . $generation;
 
-		return hash_hmac( 'sha256', $context, $password );
+		return bin2hex( hash_hkdf( 'sha256', $password, 32, $context, $secret ) );
 	}
 }

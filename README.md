@@ -38,7 +38,9 @@ distinct visitors needs, and it is worthless to whoever takes the table without
 the secret.
 
 An empty value hashes to `''`, not to a digest of the empty string, which would
-otherwise compare equal across every row that had no address.
+otherwise compare equal across every row that had no address. An empty
+*secret* is refused with an exception: an HMAC under `''` is a hash anybody can
+compute.
 
 One configured secret, several purposes: derive a key per purpose rather than
 keying every index with the secret itself, so an email's lookup hash never
@@ -107,9 +109,22 @@ rotating the password would. Nothing about it is written into the cookie, so
 there is nothing to edit: a cookie from an older generation is refused as a bad
 signature — `Reason::InvalidSignature`, never `Expired` — before anything in it
 is read. Make the increment durable before responding, or a crash in between
-leaves every session it was meant to end still valid. Generation `0`, the
-default, derives the same key as before there were generations, so an
-application that never passes one sees no change.
+leaves every session it was meant to end still valid.
+
+The key is HKDF-SHA256 of the password. Up to 1.3 it was an HMAC keyed with the
+password over a fixed string — which is exactly what `Hash::opaque()` of that
+string gives under the same secret, and what `Csrf::token()` printed for a
+cookie set to it. An application that hands one secret to all three could be
+made to show its session signing key. **Upgrading to 1.4.0 therefore signs
+everybody out once.**
+
+A captured cookie lets someone test password guesses offline, since the key is
+a fast hash of the password. Where the password is one a person chose, give the
+session a server-side secret too; guessing then needs it as well:
+
+```php
+$session = new Session( $password, secret: $token_secret );
+```
 
 The signing is [signed-tokens](https://github.com/sugarcommerce/signed-tokens)
 rather than a hand-rolled HMAC, which buys two things beyond tidiness. The
@@ -163,7 +178,13 @@ enough; it still permits top-level cross-origin POSTs in some browsers, which
 is exactly the shape of a form-submit attack.
 
 Key it on a general token secret rather than the password behind the session,
-so rotating one does not silently invalidate the other.
+so rotating one does not silently invalidate the other. The HMAC is keyed with
+a key derived from that secret, never with the secret itself: `token()` hashes
+whatever cookie a request sends, signed in or not, and keyed with the bare
+secret (as before 1.4) it was an oracle for every other keyed hash of it. The
+change means tokens rendered before upgrading to 1.4.0 fail once. A cookie that
+arrives as an array (`name[]=x`) has no token, and an empty secret gives none
+either — every check fails.
 
 Where the token arrived, and what the browser says about where the request came
 from:
@@ -240,9 +261,23 @@ $magic->read( $_COOKIE['buyer'] ?? '' );                   // who is signed in
 
 The link and the session are signed under different namespaces, so a long-lived
 cookie pasted into the sign-in URL is not a link, and a forwarded link is not a
-session. Not single-use, deliberately: mail scanners fetch every URL in a
-message before the person clicks, and a link that burns on first fetch is spent
-before it is used. Its short life is what limits it.
+session. Not single-use on its own: mail scanners fetch every URL in a message
+before the person clicks, and a link that burns on first fetch is spent before
+it is used. Its short life is what limits it — and until then anybody holding
+it can sign in.
+
+Every link carries a random `jti` (`MagicLink::ID`, reserved) so it can be made
+single-use without breaking scanners: have the link open a page that asks for
+one click, and on that POST record the `jti` and refuse one already recorded.
+
+```php
+$token = $magic->redeem( $_POST['t'] ?? '' );
+
+// INSERT OR IGNORE into your own table, keyed by jti; true when the row is new.
+if ( $token instanceof Token && $spent->record( (string) $token->get( MagicLink::ID ) ) ) {
+    setcookie( 'buyer', $magic->issue( array( 'e' => $token->get( 'e' ) ) ), $magic->cookie_options( $is_https ) );
+}
+```
 
 ## Public forms
 
@@ -275,10 +310,10 @@ composer install
 composer test
 ```
 
-88 tests: sessions, their claims and their generations, CSRF tokens, where a
-token was submitted and same-origin checks, keyed and derived hashing, sealing,
-sealing once and re-sealing across keys, magic links and their separation from
-sessions, form stamps that are too fast, too late or forged, and that every
+103 tests: sessions, their claims, their generations and their key derivation,
+CSRF tokens and their derived key, where a token was submitted and same-origin
+checks, keyed and derived hashing, sealing, sealing once and re-sealing across
+keys, magic links, their identifiers and their separation from sessions, form stamps that are too fast, too late or forged, and that every
 must-check result keeps its `#[\NoDiscard]`.
 
 ## License

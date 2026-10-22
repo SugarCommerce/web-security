@@ -82,6 +82,26 @@ final class MagicLinkTest extends TestCase {
 		$this->assertTrue( self::link()->configured() );
 	}
 
+	/**
+	 * What an application records to make a link single-use.
+	 */
+	public function test_every_link_carries_its_own_identifier(): void {
+		$first  = self::link()->redeem( self::link()->link( array( 'e' => 'a@example.com' ) ) );
+		$second = self::link()->redeem( self::link()->link( array( 'e' => 'a@example.com' ) ) );
+
+		$this->assertInstanceOf( Token::class, $first );
+		$this->assertInstanceOf( Token::class, $second );
+		$this->assertMatchesRegularExpression( '/^[a-f0-9]{32}$/D', (string) $first->get( MagicLink::ID ) );
+		$this->assertNotSame( $first->get( MagicLink::ID ), $second->get( MagicLink::ID ) );
+	}
+
+	public function test_a_caller_cannot_choose_the_identifier(): void {
+		$token = self::link()->redeem( self::link()->link( array( 'e' => 'a@example.com', MagicLink::ID => 'spent-one' ) ) );
+
+		$this->assertInstanceOf( Token::class, $token );
+		$this->assertNotSame( 'spent-one', $token->get( MagicLink::ID ) );
+	}
+
 	public function test_the_cookie_options_are_the_sessions(): void {
 		$options = self::link()->cookie_options( true, '/orders' );
 

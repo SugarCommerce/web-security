@@ -45,6 +45,12 @@ final readonly class Sealer {
 	public const string PREFIX = 's1.';
 
 	/**
+	 * What follows the prefix in a sealed value: URL-safe base64 of a nonce,
+	 * a MAC and at least one byte, which is 55 characters or more.
+	 */
+	private const string SHAPE = '/^s1\.[A-Za-z0-9_-]{55,}\z/';
+
+	/**
 	 * The derived key.
 	 */
 	private string $key;
@@ -67,6 +73,17 @@ final readonly class Sealer {
 		}
 
 		$this->key = hash_hkdf( 'sha256', $secret, SODIUM_CRYPTO_SECRETBOX_KEYBYTES, 'web-security/sealer/v1/' . $context );
+	}
+
+	/**
+	 * Keep the key out of `var_dump()` and `print_r()`.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return array{key: string}
+	 */
+	public function __debugInfo(): array {
+		return array( 'key' => '[redacted]' );
 	}
 
 	/**
@@ -207,13 +224,19 @@ final readonly class Sealer {
 	/**
 	 * Whether a value is in sealed form.
 	 *
+	 * The prefix and a body that could be a sealed one, not the prefix
+	 * alone: a plain value that happens to start `s1.` — anything a person
+	 * typed can — is not ciphertext, and seal_once() must not store it
+	 * unsealed on that account.
+	 *
 	 * @since 1.2.0
+	 * @since 1.4.0 Checks the shape of what follows the prefix.
 	 *
 	 * @param string $value Stored value.
 	 *
 	 * @return bool
 	 */
 	public static function sealed( string $value ): bool {
-		return str_starts_with( $value, self::PREFIX );
+		return str_starts_with( $value, self::PREFIX ) && 1 === preg_match( self::SHAPE, $value );
 	}
 }

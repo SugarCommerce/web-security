@@ -69,7 +69,7 @@ final class SealerTest extends TestCase {
 		$this->assertSame( 'plain@example.com', $sealer->reveal( 'plain@example.com' ) );
 		$this->assertNull( $sealer->reveal( null ) );
 		$this->assertSame( 42, $sealer->reveal( 42 ) );
-		$this->assertSame( '', $sealer->reveal( Sealer::PREFIX . 'garbage' ), 'Never shows ciphertext as a value.' );
+		$this->assertSame( '', $sealer->reveal( Sealer::PREFIX . str_repeat( 'A', 60 ) ), 'Never shows ciphertext as a value.' );
 	}
 
 	public function test_a_short_secret_is_refused(): void {
@@ -87,6 +87,27 @@ final class SealerTest extends TestCase {
 		$this->assertSame( $sealed, $sealer->seal_once( $sealed ) );
 		$this->assertSame( 'a@example.com', $sealer->open( $sealer->seal_once( 'a@example.com' ) ) );
 		$this->assertSame( '', $sealer->seal_once( '' ) );
+	}
+
+	/**
+	 * Anybody can type a value that starts `s1.`. Taken as sealed on the
+	 * prefix alone, seal_once() stored it in the clear.
+	 */
+	public function test_a_plain_value_that_starts_like_a_sealed_one_is_still_sealed(): void {
+		$sealer = $this->sealer();
+
+		foreach ( array( 's1.', 's1.jordan', 's1.' . str_repeat( 'A', 54 ), 's1.' . str_repeat( 'A', 60 ) . "\n", 's1.' . str_repeat( 'A', 59 ) . '=' ) as $plain ) {
+			$this->assertFalse( Sealer::sealed( $plain ) );
+			$this->assertSame( $plain, $sealer->open( $sealer->seal_once( $plain ) ) );
+			$this->assertSame( $plain, $sealer->reveal( $plain ) );
+		}
+
+		$this->assertTrue( Sealer::sealed( $sealer->seal( 'x' ) ) );
+	}
+
+	public function test_dumping_it_does_not_print_the_key(): void {
+		$this->assertStringContainsString( '[redacted]', print_r( $this->sealer(), true ) );
+		$this->assertStringNotContainsString( self::SECRET, print_r( $this->sealer(), true ) );
 	}
 
 	/* ─── Re-sealing ───────────────────────────────────────────────────── */

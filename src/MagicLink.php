@@ -28,10 +28,17 @@ use SugarCommerce\SignedTokens\{Reason, Token, TokenSigner};
  * signed under its own namespace and the session under Session's, with its
  * subject — neither verifies as the other.
  *
- * Deliberately not single-use. Mail scanners and link previewers fetch every
+ * Not single-use on its own. Mail scanners and link previewers fetch every
  * URL in a message before the person sees it, and a link that burns on the
  * first fetch has been spent before anybody clicks it. Its short life is
- * what limits it.
+ * what limits it — and until it runs out, anybody holding the link, from a
+ * forwarded email, a shared screen or a proxy log, can sign in with it.
+ *
+ * Each link carries a random `jti` so an application can close that: have
+ * the page the link opens ask for one click, a POST that a scanner does not
+ * make, and on that POST record the `jti` as spent and refuse one already
+ * recorded. Keep the record for the link's TTL; after that the signature
+ * refuses it anyway.
  *
  * Claims are identifiers — an address, an account id — signed so they
  * cannot be edited, but readable by whoever holds the link or cookie. Never
@@ -48,6 +55,12 @@ final readonly class MagicLink {
 	public const int TTL = 3600;
 
 	/**
+	 * The claim carrying each link's random identifier. Reserved: a caller's
+	 * own `jti` is replaced.
+	 */
+	public const string ID = 'jti';
+
+	/**
 	 * @since 1.3.0
 	 *
 	 * @param TokenSigner|null $signer    Signs the link. Null disables links,
@@ -57,7 +70,8 @@ final readonly class MagicLink {
 	 * @param Session          $session   The session a link is exchanged for.
 	 * @param string           $namespace What links are signed under. Any
 	 *                                    name except Session's own.
-	 * @param int              $ttl       Seconds a link lasts.
+	 * @param int              $ttl       Seconds a link lasts. Below one
+	 *                                    second is one second.
 	 *
 	 * @throws \InvalidArgumentException When the namespace is Session's.
 	 */
@@ -88,12 +102,26 @@ final readonly class MagicLink {
 	 *
 	 * @since 1.3.0
 	 *
-	 * @param array<string, scalar> $claims Who it signs in, e.g. `['e' => $email]`.
+	 * @since 1.4.0 Adds a random `jti`.
+	 *
+	 * @param array<string, string|int|bool> $claims Who it signs in, e.g.
+	 *                                               `['e' => $email]`. `jti`
+	 *                                               is reserved.
 	 *
 	 * @return string The token, or '' when this install cannot sign one.
+	 *
+	 * @throws \InvalidArgumentException When a claim is not a string, int
+	 *                                   or bool.
+	 * @throws \Random\RandomException   When the CSPRNG is unavailable.
 	 */
 	public function link( array $claims ): string {
-		return null === $this->signer ? '' : $this->signer->sign( $this->namespace, $claims, max( 1, $this->ttl ) );
+		if ( null === $this->signer ) {
+			return '';
+		}
+
+		// The identifier first: `+` keeps the left side's keys, so a caller
+		// cannot choose it and make two links share one.
+		return $this->signer->sign( $this->namespace, array( self::ID => bin2hex( random_bytes( 16 ) ) ) + $claims, max( 1, $this->ttl ) );
 	}
 
 	/**
@@ -119,12 +147,14 @@ final readonly class MagicLink {
 	 *
 	 * @since 1.3.0
 	 *
-	 * @param array<string, scalar> $claims Who is signed in. `sub` is
-	 *                                      reserved by Session.
+	 * @param array<string, string|int|bool> $claims Who is signed in. `sub`
+	 *                                               is reserved by Session.
 	 *
 	 * @return string
 	 *
-	 * @throws \LogicException When the session has no secret.
+	 * @throws \LogicException           When the session has no secret.
+	 * @throws \InvalidArgumentException When a claim is not a string, int
+	 *                                   or bool.
 	 */
 	public function issue( array $claims ): string {
 		return $this->session->issue( $claims );
@@ -152,7 +182,7 @@ final readonly class MagicLink {
 	 * @param bool   $is_https Whether the request arrived over TLS.
 	 * @param string $path     Path the cookie is confined to.
 	 *
-	 * @return array<string, mixed>
+	 * @return array{expires: int, path: string, secure: bool, httponly: true, samesite: 'Strict'}
 	 */
 	public function cookie_options( bool $is_https, string $path = '/' ): array {
 		return $this->session->cookie_options( $is_https, $path );

@@ -33,15 +33,38 @@ namespace SugarCommerce\WebSecurity;
 final readonly class Hash {
 
 	/**
+	 * @since 1.0.0
+	 * @since 1.4.0 Refuses an empty secret.
+	 *
 	 * @param string $secret Signing key. Losing it does not lose data, but it
 	 *                       does break comparison against everything already
 	 *                       stored, so rotating it is a migration and not a
 	 *                       configuration change.
+	 *
+	 * @throws \InvalidArgumentException When the secret is empty: an HMAC
+	 *                                   under '' is a hash anybody can
+	 *                                   compute, and an IPv4 digest under it
+	 *                                   is reversed in seconds.
 	 */
 	public function __construct(
 		#[\SensitiveParameter]
 		private string $secret,
-	) {}
+	) {
+		if ( '' === $secret ) {
+			throw new \InvalidArgumentException( 'A hashing secret cannot be empty: the digests would be reversible by anybody.' );
+		}
+	}
+
+	/**
+	 * Keep the secret out of `var_dump()` and `print_r()`.
+	 *
+	 * @since 1.4.0
+	 *
+	 * @return array{secret: string}
+	 */
+	public function __debugInfo(): array {
+		return array( 'secret' => '[redacted]' );
+	}
 
 	/**
 	 * A hasher keyed for one purpose, from a secret shared by several.
@@ -63,6 +86,8 @@ final readonly class Hash {
 	 *                        Different contexts never produce equal digests.
 	 *
 	 * @return self
+	 *
+	 * @throws \ValueError When the secret is empty.
 	 */
 	public static function derived( #[\SensitiveParameter] string $secret, string $context ): self {
 		return new self( hash_hkdf( 'sha256', $secret, 32, $context ) );

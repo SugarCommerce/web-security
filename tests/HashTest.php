@@ -23,6 +23,18 @@ final class HashTest extends TestCase {
 		$this->hash = new Hash( 'a-secret-at-least-this-long' );
 	}
 
+	public function test_an_empty_secret_is_refused(): void {
+		// HMAC under '' is a hash anybody can compute: every IPv4 digest
+		// would be reversible in seconds.
+		$this->expectException( \InvalidArgumentException::class );
+
+		new Hash( '' );
+	}
+
+	public function test_dumping_it_does_not_print_the_secret(): void {
+		$this->assertStringNotContainsString( 'a-secret-at-least-this-long', print_r( $this->hash, true ) );
+	}
+
 	public function test_the_same_address_always_gives_the_same_digest(): void {
 		$this->assertSame( $this->hash->ip( '1.2.3.4' ), $this->hash->ip( '1.2.3.4' ) );
 	}

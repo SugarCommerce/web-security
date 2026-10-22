@@ -67,6 +67,41 @@ final class CsrfTest extends TestCase {
 		$this->assertStringNotContainsString( '<script', $field );
 	}
 
+	/**
+	 * token() answers for whatever cookie arrives, signed in or not, so it
+	 * must not be HMAC( secret, chosen value ) — that is Hash::opaque() under
+	 * the same secret, and what other keys get derived as.
+	 */
+	public function test_the_token_is_not_a_keyed_hash_under_the_bare_secret(): void {
+		$chosen = 'web-security/session/v1';
+		$token  = $this->csrf->token( array( 'admin_session' => $chosen ) );
+
+		$this->assertNotSame( hash_hmac( 'sha256', $chosen, 'token-secret' ), $token );
+		$this->assertNotSame( ( new \SugarCommerce\WebSecurity\Hash( 'token-secret' ) )->opaque( $chosen ), $token );
+		$this->assertSame( 64, strlen( $token ) );
+	}
+
+	public function test_a_cookie_that_is_not_a_string_is_no_session(): void {
+		// `admin_session[]=x` arrives as an array; cast, every such request
+		// would share the token for "Array".
+		$cookies = array( 'admin_session' => array( 'x' ) );
+
+		$this->assertSame( '', $this->csrf->token( $cookies ) );
+		$this->assertFalse( $this->csrf->verify( $this->csrf->token( array( 'admin_session' => 'Array' ) ), $cookies ) );
+	}
+
+	public function test_with_no_secret_every_check_fails(): void {
+		$csrf    = new Csrf( '', 'admin_session' );
+		$cookies = array( 'admin_session' => 'cookie-value' );
+
+		$this->assertSame( '', $csrf->token( $cookies ) );
+		$this->assertFalse( $csrf->verify( hash_hmac( 'sha256', 'cookie-value', '' ), $cookies ) );
+	}
+
+	public function test_dumping_it_does_not_print_the_secret(): void {
+		$this->assertStringNotContainsString( 'token-secret', print_r( $this->csrf, true ) );
+	}
+
 	public function test_it_reads_the_cookie_name_it_was_given(): void {
 		$this->assertSame( '', $this->csrf->token( array( 'some_other_cookie' => 'x' ) ) );
 	}
