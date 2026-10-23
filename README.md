@@ -299,6 +299,10 @@ $sealer->seal_once( $value );    // never seals a sealed value twice
 by running it again. Null means the value is under a key nobody has: stop
 rather than overwrite it.
 
+### Sealing files
+
+`seal()` needs the whole value in memory. `seal_file( $from, $to )` and `open_file( $from, $to )` work 64 KB at a time (libsodium secretstream), so a backup can be sealed whatever its size. A file cut short, reordered or edited does not open, and nothing is left at `$to`.
+
 ## Magic links
 
 Passwordless sign-in: a short-lived link that is exchanged for a session.
@@ -338,6 +342,23 @@ if ( $token instanceof Token && $spent->record( (string) $token->get( MagicLink:
 }
 ```
 
+## One click to confirm a link
+
+A link that does something is fetched by mail scanners before anybody clicks it, so it opens a page with one button and only that POST does the thing. `Confirmation` proves the POST came from that page in this browser: a nonce in the form and in a SameSite=Strict cookie. `MagicLink::spend_once()` then makes the link work once.
+
+```php
+[ 'nonce' => $nonce, 'cookie' => $set_cookie ] = $confirm->start( $secure );        // GET: render the button
+
+if ( ! $confirm->confirmed( $request->cookies, $request->input( 'nonce' ) )          // POST
+	|| ! $links->spend_once( $token, fn( $key, $ttl ) => $cache->add( $key, '1', $ttl ) ) ) {
+	// refuse
+}
+```
+
+## Forms without a token
+
+`Csrf::same_site( $sec_fetch_site, $origin, $referer, $host )` — Sec-Fetch-Site when the browser sends it (`same-origin` or `none`; `same-site` is another subdomain and is refused), else an Origin or Referer naming this host. A request that says nothing is refused unless you pass `allow_unknown: true`.
+
 ## Public forms
 
 A trap field and a signed stamp of when the form was drawn — most of what a
@@ -369,10 +390,10 @@ composer install
 composer test
 ```
 
-133 tests: sessions, their claims, their generations and their key derivation,
+148 tests: sessions, their claims, their generations and their key derivation,
 CSRF tokens and their derived key, where a token was submitted and same-origin
 checks, keyed and derived hashing, sealing, sealing once and re-sealing across
-keys, magic links, their identifiers and their separation from sessions, reveals that are encrypted, shown once and refused when tampered with or expired, form stamps that are too fast, too late or forged, and that every
+keys, magic links, their identifiers and their separation from sessions, reveals that are encrypted, shown once and refused when tampered with or expired, confirmations, links spent once, same-site checks, files sealed in chunks and refused when cut, reordered or edited, form stamps that are too fast, too late or forged, and that every
 must-check result keeps its `#[\NoDiscard]`.
 
 ## License

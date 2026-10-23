@@ -56,6 +56,22 @@ final readonly class Sealer {
 	private string $key;
 
 	/**
+	 * The key files are sealed with: derived apart from $key, so the two
+	 * constructions never share one.
+	 */
+	private string $stream_key;
+
+	/**
+	 * What a sealed file starts with, and which format it is in.
+	 */
+	private const string FILE_MAGIC = "SCSEAL\x00\x01";
+
+	/**
+	 * Bytes of plain text per sealed chunk.
+	 */
+	private const int CHUNK = 65536;
+
+	/**
 	 * @since 1.2.0
 	 *
 	 * @param string $secret Any high-entropy secret, at least 32 bytes. The
@@ -72,7 +88,8 @@ final readonly class Sealer {
 			throw new \InvalidArgumentException( 'A sealing secret must be at least 32 bytes.' );
 		}
 
-		$this->key = hash_hkdf( 'sha256', $secret, SODIUM_CRYPTO_SECRETBOX_KEYBYTES, 'web-security/sealer/v1/' . $context );
+		$this->key        = hash_hkdf( 'sha256', $secret, SODIUM_CRYPTO_SECRETBOX_KEYBYTES, 'web-security/sealer/v1/' . $context );
+		$this->stream_key = hash_hkdf( 'sha256', $secret, SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_KEYBYTES, 'web-security/sealer/file/v1/' . $context );
 	}
 
 	/**
@@ -238,5 +255,177 @@ final readonly class Sealer {
 	 */
 	public static function sealed( string $value ): bool {
 		return str_starts_with( $value, self::PREFIX ) && 1 === preg_match( self::SHAPE, $value );
+	}
+
+	/**
+	 * Seal a file into another, a chunk at a time.
+	 *
+	 * seal() needs the whole value in memory, and so would a backup sealed
+	 * that way — a database that grows past memory_limit stops being backed
+	 * up at all. This reads and writes 64 KB at a time (libsodium's
+	 * secretstream, XChaCha20-Poly1305), so memory stays flat whatever the
+	 * size. Each chunk is authenticated and the last one marked, so a sealed
+	 * file that was cut short, reordered or edited does not open.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @param string $from File to seal.
+	 * @param string $to   Where the sealed copy goes; replaced if present.
+	 *
+	 * @return void
+	 *
+	 * @throws \RuntimeException When either file cannot be opened or written.
+	 */
+	public function seal_file( string $from, string $to ): void {
+		$in  = self::handle( $from, 'rb' );
+		$out = self::handle( $to, 'wb' );
+
+		try {
+			[ $state, $header ] = sodium_crypto_secretstream_xchacha20poly1305_init_push( $this->stream_key );
+
+			if ( ! is_string( $state ) || ! is_string( $header ) ) {
+				throw new \RuntimeException( 'libsodium could not start a sealed stream.' );
+			}
+
+			self::write_all( $out, self::FILE_MAGIC . $header );
+
+			$chunk = self::read_up_to( $in, self::CHUNK );
+
+			do {
+				$next = self::read_up_to( $in, self::CHUNK );
+				$last = '' === $next;
+				self::write_all( $out, sodium_crypto_secretstream_xchacha20poly1305_push( $state, $chunk, '', $last ? SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL : SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_MESSAGE ) );
+				$chunk = $next;
+			} while ( ! $last );
+		} finally {
+			fclose( $in );
+			fclose( $out );
+		}
+	}
+
+	/**
+	 * Open a file seal_file() sealed, into another.
+	 *
+	 * False — and nothing left at $to — when it was sealed with another key
+	 * or context, is not a sealed file, or was cut short, reordered or
+	 * edited: the plain copy is only kept once every chunk has verified and
+	 * the last one says it is the last.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @param string $from Sealed file.
+	 * @param string $to   Where the plain copy goes; replaced if present.
+	 *
+	 * @return bool
+	 *
+	 * @throws \RuntimeException When either file cannot be opened or written.
+	 */
+	#[\NoDiscard( 'False means the file did not open, and nothing was written.' )]
+	public function open_file( string $from, string $to ): bool {
+		$in  = self::handle( $from, 'rb' );
+		$out = self::handle( $to, 'wb' );
+		$ok  = false;
+
+		try {
+			$head = self::read_up_to( $in, strlen( self::FILE_MAGIC ) + SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES );
+
+			if ( ! str_starts_with( $head, self::FILE_MAGIC ) || strlen( $head ) !== strlen( self::FILE_MAGIC ) + SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES ) {
+				return false;
+			}
+
+			$state = sodium_crypto_secretstream_xchacha20poly1305_init_pull( substr( $head, strlen( self::FILE_MAGIC ) ), $this->stream_key );
+
+			while ( true ) {
+				$sealed = self::read_up_to( $in, self::CHUNK + SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_ABYTES );
+
+				if ( '' === $sealed ) {
+					return false; // Ended without the final chunk: cut short.
+				}
+
+				$opened = sodium_crypto_secretstream_xchacha20poly1305_pull( $state, $sealed );
+
+				if ( ! is_array( $opened ) || ! is_string( $opened[0] ?? null ) ) {
+					return false;
+				}
+
+				self::write_all( $out, $opened[0] );
+
+				if ( SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL === $opened[1] ) {
+					// Anything after the final chunk was added later.
+					return $ok = '' === self::read_up_to( $in, 1 );
+				}
+			}
+		} finally {
+			fclose( $in );
+			fclose( $out );
+
+			if ( ! $ok ) {
+				@unlink( $to );
+			}
+		}
+	}
+
+	/**
+	 * A file handle, or a RuntimeException naming the file.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @param string $path File.
+	 * @param string $mode fopen() mode.
+	 *
+	 * @return resource
+	 *
+	 * @throws \RuntimeException When it cannot be opened.
+	 */
+	private static function handle( string $path, string $mode ) {
+		$handle = '' === $path ? false : @fopen( $path, $mode );
+
+		if ( false === $handle ) {
+			throw new \RuntimeException( 'Could not open ' . json_encode( $path ) . '.' );
+		}
+
+		return $handle;
+	}
+
+	/**
+	 * Up to $length bytes, fewer only at the end of the file.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @param resource $handle Open file.
+	 * @param int      $length Bytes wanted.
+	 *
+	 * @return string
+	 */
+	private static function read_up_to( $handle, int $length ): string {
+		$data = '';
+
+		while ( strlen( $data ) < $length && ! feof( $handle ) ) {
+			$part = fread( $handle, max( 1, $length - strlen( $data ) ) );
+
+			if ( false === $part ) {
+				throw new \RuntimeException( 'Could not read a file being sealed or opened.' );
+			}
+
+			$data .= $part;
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Write all of it, or a RuntimeException.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @param resource $handle Open file.
+	 * @param string   $data   Bytes.
+	 *
+	 * @return void
+	 */
+	private static function write_all( $handle, string $data ): void {
+		if ( '' !== $data && strlen( $data ) !== fwrite( $handle, $data ) ) {
+			throw new \RuntimeException( 'Could not write a file being sealed or opened (disk full?).' );
+		}
 	}
 }

@@ -109,4 +109,37 @@ final class MagicLinkTest extends TestCase {
 		$this->assertTrue( $options['secure'] );
 		$this->assertTrue( $options['httponly'] );
 	}
+
+	/* ─── spend_once (1.7.0) ────────────────────────────────────────── */
+
+	public function test_a_link_spends_once(): void {
+		$seen  = array();
+		$first = static function ( string $key, int $ttl ) use ( &$seen ): bool {
+			if ( isset( $seen[ $key ] ) ) {
+				return false;
+			}
+			$seen[ $key ] = $ttl;
+			return true;
+		};
+
+		$token = self::link()->redeem( self::link()->link( array( 'e' => 'a@example.com' ) ) );
+		$this->assertInstanceOf( Token::class, $token );
+
+		$this->assertTrue( self::link()->spend_once( $token, $first ) );
+		$this->assertFalse( self::link()->spend_once( $token, $first ), 'the second time' );
+		$this->assertCount( 1, $seen );
+		$this->assertGreaterThan( 0, current( $seen ), 'kept for as long as the link verifies' );
+
+		$other = self::link()->redeem( self::link()->link( array( 'e' => 'a@example.com' ) ) );
+		$this->assertInstanceOf( Token::class, $other );
+		$this->assertTrue( self::link()->spend_once( $other, $first ), 'another link for the same claims is its own' );
+	}
+
+	public function test_a_token_without_a_jti_never_spends(): void {
+		$called = false;
+		$token  = new Token( 'buyer-purchases', array( 'e' => 'a@example.com' ), self::NOW + 600 );
+
+		$this->assertFalse( self::link()->spend_once( $token, function () use ( &$called ): bool { $called = true; return true; } ) );
+		$this->assertFalse( $called );
+	}
 }

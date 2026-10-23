@@ -12,9 +12,10 @@ namespace SugarCommerce\WebSecurity;
 /**
  * Trait ShortCookie
  *
- * A short-lived, HttpOnly, SameSite=Lax cookie that crosses one redirect:
+ * A short-lived, HttpOnly, SameSite cookie that crosses one redirect:
  * the name and path checks, the Set-Cookie line, and the take-and-clear
- * read. {@see Flash} and {@see Reveal} differ only in what the value holds,
+ * read. {@see Flash}, {@see Reveal} and {@see Confirmation} differ only in
+ * what the value holds,
  * so the parts that decide how it is sent live here once.
  *
  * @internal
@@ -87,17 +88,19 @@ trait ShortCookie {
 	 *
 	 * @param string $value   Cookie value. Base64url and separators that need
 	 *                        no encoding.
-	 * @param int    $expires Unix time it expires.
-	 * @param bool   $secure  Whether to mark it Secure.
+	 * @param int    $expires  Unix time it expires.
+	 * @param bool   $secure   Whether to mark it Secure.
+	 * @param string $samesite Lax, or Strict for a cookie only this site's
+	 *                         own pages may send back. Since 1.7.0.
 	 *
 	 * @return string
 	 */
-	private function line( string $value, int $expires, bool $secure ): string {
+	private function line( string $value, int $expires, bool $secure, string $samesite = 'Lax' ): string {
 		return $this->cookie . '=' . $value
 			. '; Expires=' . gmdate( 'D, d M Y H:i:s \G\M\T', $expires )
 			. '; Max-Age=' . max( 0, $expires - time() )
 			. '; Path=' . $this->path
 			. ( $secure ? '; Secure' : '' )
-			. '; HttpOnly; SameSite=Lax';
+			. '; HttpOnly; SameSite=' . ( 'Strict' === $samesite ? 'Strict' : 'Lax' );
 	}
 }

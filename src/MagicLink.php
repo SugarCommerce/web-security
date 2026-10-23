@@ -175,6 +175,42 @@ final readonly class MagicLink {
 	}
 
 	/**
+	 * Spend a redeemed link, once.
+	 *
+	 * For the confirming POST the class description asks for: records the
+	 * link's `jti` as used, through $first — a store's "add unless present",
+	 * true only for the call that added it — for as long as the link could
+	 * still verify. False means the link was spent already, or carries no
+	 * `jti` (a token this class did not mint), and must sign nobody in.
+	 *
+	 * ```php
+	 * $cache = new Cache( $db );
+	 * if ( ! $links->spend_once( $token, fn( string $key, int $ttl ) => $cache->add( $key, '1', $ttl ) ) ) {
+	 *     // "This link has been used"
+	 * }
+	 * ```
+	 *
+	 * @since 1.7.0
+	 *
+	 * @param Token    $token What redeem() returned.
+	 * @param \Closure(string, int): bool $first Records a key for some
+	 *                                     seconds; true only if it was not
+	 *                                     there already.
+	 *
+	 * @return bool
+	 */
+	#[\NoDiscard( 'False means the link was already used.' )]
+	public function spend_once( Token $token, \Closure $first ): bool {
+		$jti = $token->get( self::ID );
+
+		if ( ! is_string( $jti ) || '' === $jti ) {
+			return false;
+		}
+
+		return true === $first( 'magic-link:' . $token->namespace . ':' . $jti, max( 1, $token->seconds_remaining() ) );
+	}
+
+	/**
 	 * Attributes for the session cookie. See Session::cookie_options().
 	 *
 	 * @since 1.3.0

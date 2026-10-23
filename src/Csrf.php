@@ -225,6 +225,46 @@ final readonly class Csrf {
 	}
 
 	/**
+	 * Whether a request came from this site's own pages, by the browser's
+	 * word — for a form that carries no token.
+	 *
+	 * Sec-Fetch-Site first: every current browser sends it and no page can
+	 * set it, and it stays exact where the others do not — a page sent with
+	 * `Referrer-Policy: no-referrer` makes the browser's own same-origin post
+	 * say `Origin: null` with no Referer, which same_origin() cannot tell
+	 * from a forged one. `same-origin`, or `none` (typed, or a bookmark),
+	 * pass; `same-site` does not, because another subdomain — a seller's own
+	 * content, say — is same-site. Without it, the Origin or Referer has to
+	 * name this host.
+	 *
+	 * A request with none of the three proves nothing. It is refused unless
+	 * $allow_unknown — right for a tool scripts call too, never for a form
+	 * whose only protection this is.
+	 *
+	 * @since 1.7.0
+	 *
+	 * @param string $fetch_site    The Sec-Fetch-Site header, or ''.
+	 * @param string $origin        The Origin header, or ''.
+	 * @param string $referer       The Referer header, or ''.
+	 * @param string $host          The host the request arrived on, with any port.
+	 * @param bool   $allow_unknown Allow a request that says nothing.
+	 *
+	 * @return bool
+	 */
+	#[\NoDiscard( 'False means the request did not come from this site.' )]
+	public static function same_site( string $fetch_site, string $origin, string $referer, string $host, bool $allow_unknown = false ): bool {
+		$site = strtolower( trim( $fetch_site ) );
+
+		if ( '' !== $site ) {
+			return in_array( $site, array( 'same-origin', 'none' ), true );
+		}
+
+		$claimed = '' !== $origin ? $origin : $referer;
+
+		return '' === $claimed ? $allow_unknown : self::names_host( $claimed, $host );
+	}
+
+	/**
 	 * Whether a URL names exactly this host.
 	 *
 	 * @since 1.3.0

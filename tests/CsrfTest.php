@@ -137,4 +137,26 @@ final class CsrfTest extends TestCase {
 		$this->assertFalse( Csrf::names_host( 'null', 'shop.example' ), 'A sandboxed frame names no host.' );
 		$this->assertFalse( Csrf::same_origin( 'null', '', 'shop.example' ) );
 	}
+
+	/* ─── same_site (1.7.0) ─────────────────────────────────────────── */
+
+	public function test_sec_fetch_site_decides_when_present(): void {
+		$this->assertTrue( Csrf::same_site( 'same-origin', '', '', 'shop.example' ) );
+		$this->assertTrue( Csrf::same_site( 'None', '', '', 'shop.example' ), 'typed or bookmarked' );
+		$this->assertFalse( Csrf::same_site( 'same-site', 'https://shop.example', '', 'shop.example' ), 'another subdomain, whatever Origin says' );
+		$this->assertFalse( Csrf::same_site( 'cross-site', 'https://shop.example', '', 'shop.example' ) );
+	}
+
+	public function test_without_it_origin_or_referer_must_name_this_host(): void {
+		$this->assertTrue( Csrf::same_site( '', 'https://shop.example', '', 'shop.example' ) );
+		$this->assertTrue( Csrf::same_site( '', '', 'https://shop.example/page', 'shop.example' ) );
+		$this->assertFalse( Csrf::same_site( '', 'https://evil.example', 'https://shop.example/', 'shop.example' ), 'Origin wins' );
+		$this->assertFalse( Csrf::same_site( '', 'null', '', 'shop.example' ), 'a no-referrer page posts Origin: null' );
+	}
+
+	public function test_a_request_that_says_nothing_is_refused_unless_allowed(): void {
+		$this->assertFalse( Csrf::same_site( '', '', '', 'shop.example' ) );
+		$this->assertTrue( Csrf::same_site( '', '', '', 'shop.example', allow_unknown: true ) );
+		$this->assertFalse( Csrf::same_site( '', 'https://evil.example', '', 'shop.example', allow_unknown: true ), 'but never one that names elsewhere' );
+	}
 }
